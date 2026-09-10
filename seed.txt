@@ -1,0 +1,7 @@
+-- 1. INSERTAR HOTEL DE PRUEBA
+INSERT INTO public.hotels (code, name)
+VALUES ('HTL-001', 'Grand Hotel Demo')
+ON CONFLICT (code) DO NOTHING;
+
+-- 2. VERIFICAR QUE SE CREÓ EL HOTEL
+SELECT id, code, name FROM public.hotels;

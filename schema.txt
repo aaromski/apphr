@@ -1,0 +1,47 @@
+-- 1. EXTENSIONES
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- 2. TABLA DE HOTELES (TENANTS)
+CREATE TABLE public.hotels (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    code VARCHAR(20) UNIQUE NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 3. TABLA DE USUARIOS / PERFILES
+CREATE TABLE public.profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    hotel_id UUID NOT NULL REFERENCES public.hotels(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL,
+    role VARCHAR(20) CHECK (role IN ('admin', 'recepcion', 'limpieza')) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 4. TABLA DE HABITACIONES
+CREATE TABLE public.rooms (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    hotel_id UUID NOT NULL REFERENCES public.hotels(id) ON DELETE CASCADE,
+    room_number VARCHAR(10) NOT NULL,
+    status VARCHAR(20) CHECK (status IN ('Disponible', 'Ocupada', 'Sucia', 'Limpieza')) DEFAULT 'Disponible',
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(hotel_id, room_number)
+);
+
+-- 5. HABILITAR ROW LEVEL SECURITY (RLS)
+ALTER TABLE public.hotels ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.rooms ENABLE ROW LEVEL SECURITY;
+
+-- 6. POLÍTICAS RLS (AISLAMIENTO POR HOTEL_ID)
+CREATE POLICY "Acceso a habitaciones por hotel" ON public.rooms
+    FOR ALL
+    USING (
+        hotel_id = (SELECT hotel_id FROM public.profiles WHERE id = auth.uid())
+    );
+
+CREATE POLICY "Acceso a perfiles por hotel" ON public.profiles
+    FOR ALL
+    USING (
+        hotel_id = (SELECT hotel_id FROM public.profiles WHERE id = auth.uid())
+    );
