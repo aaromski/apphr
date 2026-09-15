@@ -1,4 +1,5 @@
 'use client';
+
 import { useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
@@ -20,17 +21,73 @@ export default function LoginPage() {
     setLoading(true);
     setErrorMsg('');
 
-    // Autenticación con Supabase Auth
-    const { error } = await supabase.auth.signInWithPassword({
+    // 1. Iniciar sesión en Supabase Auth
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
-    if (error) {
-      setErrorMsg('Credenciales inválidas o código de hotel incorrecto.');
+    if (authError || !authData.user) {
+      const message = authError?.message.toLowerCase() || '';
+      if (message.includes('invalid login credentials') || message.includes('invalid credentials')) {
+        setErrorMsg('La contraseña o el correo electrónico son incorrectos.');
+      } else {
+        setErrorMsg('Credenciales inválidas o error de autenticación.');
+      }
       setLoading(false);
-    } else {
-      router.push('/');
+      return;
+    }
+
+    // 2. Obtener el perfil del usuario directamente (incluyendo el campo activo)
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('role, hotel_id, nombre, activo')
+      .eq('id', authData.user.id)
+      .single();
+
+    if (profileError || !profile) {
+      setErrorMsg('No se encontró el perfil del usuario o no está registrado.');
+      setLoading(false);
+      return;
+    }
+
+    // 2.1. Validar si el usuario está inactivo
+    if (profile.activo === false) {
+      setErrorMsg('Tu cuenta está desactivada. Contacta al administrador del hotel.');
+      await supabase.auth.signOut(); // Cerramos la sesión inmediatamente
+      setLoading(false);
+      return;
+    }
+
+    // 3. Consultar la tabla hotels para verificar el código ingresado
+    const { data: hotel, error: hotelError } = await supabase
+      .from('hotels')
+      .select('code')
+      .eq('id', profile.hotel_id)
+      .single();
+
+    if (hotelError || !hotel || hotel.code.trim().toUpperCase() !== hotelCode.trim().toUpperCase()) {
+      setErrorMsg('El código del hotel no coincide con la cuenta.');
+      setLoading(false);
+      return;
+    }
+
+    // 4. Redirección por rol
+    switch (profile.role) {
+      case 'limpieza':
+        router.push('/limpieza');
+        break;
+      case 'recepcionista':
+      case 'recepcion':
+        router.push('/recepcionista');
+        break;
+      case 'admin':
+        router.push('/admin');
+        break;
+      default:
+        setErrorMsg('Rol de usuario no reconocido.');
+        setLoading(false);
+        break;
     }
   };
 
@@ -73,10 +130,12 @@ export default function LoginPage() {
               <Building2 className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
+                name="hotelCode"
+                autocomplete="organization"
                 required
                 value={hotelCode}
                 onChange={(e) => setHotelCode(e.target.value)}
-                placeholder="Ej: HOTEL-2024"
+                placeholder="Ej: HTL-001"
                 className="w-full bg-slate-50 dark:bg-[#0b0f19]/80 border border-slate-300 dark:border-slate-700/80 rounded-xl py-2.5 pl-10 pr-4 text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
               />
             </div>
@@ -89,6 +148,8 @@ export default function LoginPage() {
               <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type="email"
+                name="email"
+                autocomplete="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -105,6 +166,8 @@ export default function LoginPage() {
               <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
                 type={showPassword ? 'text' : 'password'}
+                name="password"
+                autocomplete="current-password"
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -131,7 +194,6 @@ export default function LoginPage() {
                   onChange={(e) => setRememberMe(e.target.checked)}
                   className="peer sr-only"
                 />
-                {/* Caja personalizada estilizada */}
                 <div className="w-4 h-4 rounded-md bg-slate-100 dark:bg-[#0b0f19] border border-slate-300 dark:border-slate-700/80 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 group-hover:border-slate-400 dark:group-hover:border-slate-500 transition-all flex items-center justify-center shadow-sm">
                   <svg
                     className="w-2.5 h-2.5 text-white opacity-0 peer-checked:opacity-100 transition-opacity"
