@@ -131,7 +131,7 @@ export default function LoginPage() {
               <input
                 type="text"
                 name="hotelCode"
-                autocomplete="organization"
+                autoComplete="organization"
                 required
                 value={hotelCode}
                 onChange={(e) => setHotelCode(e.target.value)}
@@ -149,7 +149,7 @@ export default function LoginPage() {
               <input
                 type="email"
                 name="email"
-                autocomplete="email"
+                autoComplete="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -167,7 +167,7 @@ export default function LoginPage() {
               <input
                 type={showPassword ? 'text' : 'password'}
                 name="password"
-                autocomplete="current-password"
+                autoComplete="current-password"
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
