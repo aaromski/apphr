@@ -1,0 +1,52 @@
+{
+  "name": "AppHR - Alerta SLA de Limpieza",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "apphr-sla-alerta",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Webhook SLA",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [260, 300],
+      "webhookId": "apphr-sla-alerta"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://earlammmyhbcnkzlddzs.supabase.co/rest/v1/notificaciones",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVhcmxhbW1teWhiY25remxkZHpzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODg0ODU1NSwiZXhwIjoyMTA0NDI0NTU1fQ.uNP-GUr-Nw_yapzuFi39nrgQYRINbGbnavWu77op5rg" },
+            { "name": "Authorization", "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVhcmxhbW1teWhiY25remxkZHpzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODg0ODU1NSwiZXhwIjoyMTA0NDI0NTU1fQ.uNP-GUr-Nw_yapzuFi39nrgQYRINbGbnavWu77op5rg" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"hotel_id\": \"{{ $json.body.hotel_id }}\",\n  \"titulo\": \"SLA superado en habitación {{ $json.body.habitacion }}\",\n  \"mensaje\": \"La habitación {{ $json.body.habitacion }} ({{ $json.body.zona }}) superó el límite de {{ $json.body.sla_min }} min con {{ $json.body.minutos_transcurridos }} min transcurridos.\",\n  \"tipo\": \"warning\",\n  \"leida\": false\n}",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000002",
+      "name": "Insertar Notificación",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 300]
+    }
+  ],
+  "connections": {
+    "Webhook SLA": {
+      "main": [[{ "node": "Insertar Notificación", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "tags": []
+}

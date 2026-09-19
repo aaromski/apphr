@@ -1,254 +1,300 @@
 'use client';
 
-import { useState } from 'react';
-import { supabase } from '@/lib/supabase';
-import { useRouter } from 'next/navigation';
-import { ShieldCheck, Building2, Mail, Lock, Eye, EyeOff } from 'lucide-react';
+import Link from 'next/link';
+import {
+  ShieldCheck,
+  Building2,
+  Sparkles,
+  BedDouble,
+  BarChart3,
+  ArrowRight,
+  LogIn,
+  CheckCircle2,
+} from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
-export default function LoginPage() {
-  const [hotelCode, setHotelCode] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [loading, setLoading] = useState(false);
-  const router = useRouter();
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setErrorMsg('');
-
-    // 1. Iniciar sesión en Supabase Auth
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (authError || !authData.user) {
-      const message = authError?.message.toLowerCase() || '';
-      if (message.includes('invalid login credentials') || message.includes('invalid credentials')) {
-        setErrorMsg('La contraseña o el correo electrónico son incorrectos.');
-      } else {
-        setErrorMsg('Credenciales inválidas o error de autenticación.');
-      }
-      setLoading(false);
-      return;
-    }
-
-    // 2. Obtener el perfil del usuario directamente (incluyendo el campo activo)
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('role, hotel_id, nombre, activo')
-      .eq('id', authData.user.id)
-      .single();
-
-    if (profileError || !profile) {
-      setErrorMsg('No se encontró el perfil del usuario o no está registrado.');
-      setLoading(false);
-      return;
-    }
-
-    // 2.1. Validar si el usuario está inactivo
-    if (profile.activo === false) {
-      setErrorMsg('Tu cuenta está desactivada. Contacta al administrador del hotel.');
-      await supabase.auth.signOut(); // Cerramos la sesión inmediatamente
-      setLoading(false);
-      return;
-    }
-
-    // 3. Consultar la tabla hotels para verificar el código ingresado
-    const { data: hotel, error: hotelError } = await supabase
-      .from('hotels')
-      .select('code')
-      .eq('id', profile.hotel_id)
-      .single();
-
-    if (hotelError || !hotel || hotel.code.trim().toUpperCase() !== hotelCode.trim().toUpperCase()) {
-      setErrorMsg('El código del hotel no coincide con la cuenta.');
-      setLoading(false);
-      return;
-    }
-
-    // 4. Redirección por rol
-    switch (profile.role) {
-      case 'limpieza':
-        router.push('/limpieza');
-        break;
-      case 'recepcionista':
-      case 'recepcion':
-        router.push('/recepcionista');
-        break;
-      case 'admin':
-        router.push('/admin');
-        break;
-      default:
-        setErrorMsg('Rol de usuario no reconocido.');
-        setLoading(false);
-        break;
-    }
-  };
-
+export default function WelcomePage() {
   return (
-    <main className="min-h-screen bg-slate-50 dark:bg-[#0b0f19] text-slate-900 dark:text-slate-200 flex flex-col items-center justify-center p-4 relative overflow-hidden font-sans transition-colors duration-300">
-      {/* Botón flotante para cambiar de tema */}
-      <div className="absolute top-4 right-4 z-20">
-        <ThemeToggle />
-      </div>
+    <div className="min-h-screen bg-slate-50 dark:bg-[#0b0f19] text-slate-900 dark:text-slate-200 flex flex-col font-sans transition-colors duration-300 relative overflow-hidden">
+      {/* Resplandores de fondo decorativos */}
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-indigo-600/10 dark:bg-indigo-600/15 rounded-full blur-3xl pointer-events-none -z-10" />
+      <div className="absolute bottom-1/3 right-10 w-[450px] h-[450px] bg-blue-500/10 dark:bg-blue-600/10 rounded-full blur-3xl pointer-events-none -z-10" />
 
-      {/* Fondo sutil con brillo */}
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
+      {/* Barra de Navegación Superior */}
+      <header className="w-full border-b border-slate-200/80 dark:border-slate-800/80 bg-white/70 dark:bg-[#0b0f19]/70 backdrop-blur-md sticky top-0 z-30 transition-colors duration-300">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          {/* Logotipo */}
+          <Link href="/" className="flex items-center gap-2.5 group">
+            <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center shadow-md shadow-indigo-500/25 group-hover:scale-105 transition-transform">
+              <ShieldCheck className="w-5 h-5 text-white" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-lg font-bold tracking-tight text-slate-900 dark:text-white leading-none">
+                AppHR
+              </span>
+              <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Hotel Management</span>
+            </div>
+          </Link>
 
-      {/* Contenedor Principal */}
-      <div className="w-full max-w-[420px] bg-white/90 dark:bg-[#111625]/90 backdrop-blur-md border border-slate-200 dark:border-slate-800/80 rounded-2xl p-8 shadow-2xl relative z-10 transition-colors duration-300">
-        
-        {/* Isotipo / Logo */}
-        <div className="flex flex-col items-center mb-6">
-          <div className="w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/30 mb-3">
-            <ShieldCheck className="w-7 h-7 text-white" />
+          {/* Menú y Acciones */}
+          <div className="flex items-center gap-3 sm:gap-4">
+            <ThemeToggle />
+
+            <Link
+              href="/login"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span>Iniciar Sesión</span>
+            </Link>
+
+            <Link
+              href="/registro"
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20 active:scale-[0.98] transition-all"
+            >
+              <Building2 className="w-3.5 h-3.5" />
+              <span>Registrar Hotel</span>
+            </Link>
           </div>
-          <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-wide flex items-center gap-1.5">
-            AppHR
-          </h1>
-          <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 mt-2">Iniciar Sesión en AppHR</p>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Accede a tu panel de gestión hotelera</p>
+        </div>
+      </header>
+
+      {/* Hero Section */}
+      <section className="relative pt-16 pb-20 sm:pt-24 sm:pb-28 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto text-center">
+        {/* Pill de versión / tecnología */}
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800/80 text-indigo-700 dark:text-indigo-300 mb-6 shadow-sm">
+          <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+          <span>Plataforma Multitenant de Gestión Hotelera en Tiempo Real</span>
         </div>
 
-        {errorMsg && (
-          <div className="bg-red-500/10 border border-red-500/20 text-red-500 dark:text-red-400 p-3 rounded-xl mb-5 text-xs text-center font-medium">
-            {errorMsg}
-          </div>
-        )}
+        {/* Título Principal */}
+        <h1 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.15]">
+          Optimiza la rotación de habitaciones y controla tus{' '}
+          <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-violet-500 dark:from-indigo-400 dark:to-violet-400">
+            tiempos de limpieza
+          </span>
+        </h1>
 
-        <form onSubmit={handleLogin} className="space-y-4">
-          {/* Campo: Código del Hotel */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Código del Hotel</label>
-            <div className="relative">
-              <Building2 className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                name="hotelCode"
-                autoComplete="organization"
-                required
-                value={hotelCode}
-                onChange={(e) => setHotelCode(e.target.value)}
-                placeholder="Ej: HTL-001"
-                className="w-full bg-slate-50 dark:bg-[#0b0f19]/80 border border-slate-300 dark:border-slate-700/80 rounded-xl py-2.5 pl-10 pr-4 text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
-              />
+        {/* Subtítulo */}
+        <p className="mt-6 text-sm sm:text-base text-slate-600 dark:text-slate-400 max-w-2xl mx-auto leading-relaxed">
+          Sincroniza recepción, camareras y gerencia sin llamadas por radio. Monitorea el cumplimiento de los tiempos límite en tiempo
+          real y agiliza los check-ins con tableros interactivos e intuitivos.
+        </p>
+
+        {/* Botones de Llamado a la Acción (CTAs) */}
+        <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4">
+          <Link
+            href="/registro"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-xl shadow-indigo-600/25 active:scale-[0.98] transition-all"
+          >
+            <span>Registrar mi Hotel</span>
+            <ArrowRight className="w-4 h-4" />
+          </Link>
+
+          <Link
+            href="/login"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-sm font-semibold bg-white dark:bg-[#111625] text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60 shadow-sm active:scale-[0.98] transition-all"
+          >
+            <LogIn className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+            <span>Acceso al Sistema (Login)</span>
+          </Link>
+        </div>
+
+        {/* Badges de Confianza / Métricas */}
+        <div className="mt-12 pt-8 border-t border-slate-200/80 dark:border-slate-800/80 grid grid-cols-2 md:grid-cols-4 gap-4 text-left">
+          <div className="p-3 rounded-xl bg-white/60 dark:bg-[#111625]/60 border border-slate-200/60 dark:border-slate-800/60">
+            <div className="text-xs text-slate-500 dark:text-slate-400 font-medium">Sincronización</div>
+            <div className="text-base font-bold text-slate-900 dark:text-white mt-0.5">Velocidad Extrema</div>
+            <div className="text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1 mt-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-pulse" />
+              Actualizaciones instantáneas en todos los dispositivos, sin demoras ni necesidad de actualizar la pantalla.
             </div>
           </div>
 
-          {/* Campo: Correo Electrónico */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Correo Electrónico</label>
-            <div className="relative">
-              <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="email"
-                name="email"
-                autoComplete="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="usuario@hotel.com"
-                className="w-full bg-slate-50 dark:bg-[#0b0f19]/80 border border-slate-300 dark:border-slate-700/80 rounded-xl py-2.5 pl-10 pr-4 text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
-              />
-            </div>
+          <div className="p-3 rounded-xl bg-white/60 dark:bg-[#111625]/60 border border-slate-200/60 dark:border-slate-800/60">
+            <div className="text-xs text-slate-500 dark:text-slate-400 font-medium">Control de Tiempos</div>
+            <div className="text-base font-bold text-slate-900 dark:text-white mt-0.5">Cero Retrasos</div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Alertas automáticas y semáforos visuales para supervisar el ritmo de limpieza en tiempo real.</div>
           </div>
 
-          {/* Campo: Contraseña */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">Contraseña</label>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type={showPassword ? 'text' : 'password'}
-                name="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full bg-slate-50 dark:bg-[#0b0f19]/80 border border-slate-300 dark:border-slate-700/80 rounded-xl py-2.5 pl-10 pr-10 text-xs text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
-              >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-            </div>
+          <div className="p-3 rounded-xl bg-white/60 dark:bg-[#111625]/60 border border-slate-200/60 dark:border-slate-800/60">
+            <div className="text-xs text-slate-500 dark:text-slate-400 font-medium">Diseño Móvil</div>
+            <div className="text-base font-bold text-slate-900 dark:text-white mt-0.5">Ultra Simple</div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Interfaz ultra simple y táctil, pensada para que el personal de limpieza trabaje sin complicaciones desde su teléfono.</div>
           </div>
 
-          {/* Opciones: Recordarme y Olvidaste */}
-          <div className="flex items-center justify-between pt-1 pb-2 text-xs">
-            <label className="flex items-center gap-2.5 cursor-pointer group select-none">
-              <div className="relative flex items-center justify-center">
-                <input
-                  type="checkbox"
-                  checked={rememberMe}
-                  onChange={(e) => setRememberMe(e.target.checked)}
-                  className="peer sr-only"
-                />
-                <div className="w-4 h-4 rounded-md bg-slate-100 dark:bg-[#0b0f19] border border-slate-300 dark:border-slate-700/80 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 group-hover:border-slate-400 dark:group-hover:border-slate-500 transition-all flex items-center justify-center shadow-sm">
-                  <svg
-                    className="w-2.5 h-2.5 text-white opacity-0 peer-checked:opacity-100 transition-opacity"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="3"
-                    viewBox="0 0 24 24"
-                  >
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
+          <div className="p-3 rounded-xl bg-white/60 dark:bg-[#111625]/60 border border-slate-200/60 dark:border-slate-800/60">
+            <div className="text-xs text-slate-500 dark:text-slate-400 font-medium">Seguridad</div>
+            <div className="text-base font-bold text-slate-900 dark:text-white mt-0.5">100% Privado</div>
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Entornos de trabajo independientes y seguros para garantizar la confidencialidad de la información de tu hotel.</div>
+          </div>
+        </div>
+      </section>
+
+      {/* Características Principales / Módulos Operativos */}
+      <section className="py-16 bg-white/50 dark:bg-[#0e1320]/50 border-y border-slate-200/80 dark:border-slate-800/80">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center max-w-2xl mx-auto mb-12">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+              Arquitectura Modular
+            </h2>
+            <p className="mt-2 text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
+              Diseñado para cada integrante de tu operación
+            </p>
+            <p className="mt-2 text-xs sm:text-sm text-slate-600 dark:text-slate-400">
+              Cada perfil cuenta con una interfaz enfocada y herramientas optimizadas para su rol diario.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Card 1: Recepción */}
+            <div className="bg-white dark:bg-[#111625] rounded-2xl p-6 border border-slate-200 dark:border-slate-800/80 shadow-md hover:border-indigo-500/40 transition-colors flex flex-col justify-between">
+              <div>
+                <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mb-4">
+                  <BedDouble className="w-5 h-5" />
                 </div>
-              </div>
-              <span className="text-slate-500 dark:text-slate-400 group-hover:text-slate-700 dark:group-hover:text-slate-300 transition-colors">
-                Recordarme
-              </span>
-            </label>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">Recepción Realtime</h3>
+                <p className="text-xs text-slate-600 dark:text-slate-400 mt-2 leading-relaxed">
+                  Tablero de habitaciones en vivo. Visualiza al instante qué unidades están disponibles, en limpieza o
+                  listas para check-in. Notificaciones inmediatas tras cada finalización.
+                </p>
 
-            <a
-              href="#"
-              suppressHydrationWarning
-              className="text-slate-500 dark:text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors font-medium"
+                <ul className="mt-4 space-y-2 text-xs text-slate-600 dark:text-slate-300">
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                    <span>Transiciones de estado protegidas</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                    <span>Disparador de check-out automatizado</span>
+                  </li>
+                </ul>
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 flex items-center justify-between">
+                <span>Rol: Recepcionista</span>
+              </div>
+            </div>
+
+            {/* Card 2: Personal de Limpieza */}
+            <div className="bg-white dark:bg-[#111625] rounded-2xl p-6 border border-slate-200 dark:border-slate-800/80 shadow-md hover:border-indigo-500/40 transition-colors flex flex-col justify-between">
+              <div>
+                <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-4">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">Panel Móvil One-Touch</h3>
+                <p className="text-xs text-slate-600 dark:text-slate-400 mt-2 leading-relaxed">
+                  Pensado para pantallas táctiles de camareras. Un solo toque inicia y finaliza la limpieza,
+                  acompañado de cronómetro activo con indicador visual de tiempo restante y tiempo límite.
+                </p>
+
+                <ul className="mt-4 space-y-2 text-xs text-slate-600 dark:text-slate-300">
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                    <span>Botones ergonómicos de 48px</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                    <span>Bitácora de habitaciones limpiadas</span>
+                  </li>
+                </ul>
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center justify-between">
+                <span>Rol: Limpieza</span>
+              </div>
+            </div>
+
+            {/* Card 3: Administración y KPIs */}
+            <div className="bg-white dark:bg-[#111625] rounded-2xl p-6 border border-slate-200 dark:border-slate-800/80 shadow-md hover:border-indigo-500/40 transition-colors flex flex-col justify-between">
+              <div>
+                <div className="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-950/80 text-violet-600 dark:text-violet-400 flex items-center justify-center mb-4">
+                  <BarChart3 className="w-5 h-5" />
+                </div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">Dashboard Gerencial</h3>
+                <p className="text-xs text-slate-600 dark:text-slate-400 mt-2 leading-relaxed">
+                  Supervisa la eficiencia global: tasa de cumplimiento a tiempo, tiempos promedio por categoría de habitación,
+                  gestión de usuarios y configuración paramétrica de zonas y tiempos.
+                </p>
+
+                <ul className="mt-4 space-y-2 text-xs text-slate-600 dark:text-slate-300">
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-violet-500 shrink-0" />
+                    <span>Actualización instantánea de rendimiento</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-violet-500 shrink-0" />
+                    <span>Parametrización por tipo de habitación</span>
+                  </li>
+                </ul>
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 text-[11px] font-semibold text-violet-600 dark:text-violet-400 flex items-center justify-between">
+                <span>Rol: Administrador</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Banner de Invitación al Registro */}
+      <section className="py-16 px-4 sm:px-6 lg:px-8 max-w-4xl mx-auto text-center">
+        <div className="bg-gradient-to-br from-indigo-600 to-indigo-800 dark:from-indigo-900/90 dark:to-[#111625] rounded-3xl p-8 sm:p-12 text-white shadow-2xl relative overflow-hidden">
+          <div className="absolute top-0 right-0 -translate-y-12 translate-x-12 w-64 h-64 bg-white/10 rounded-full blur-2xl pointer-events-none" />
+
+          <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
+            ¿Listo para llevar la gestión de tu hotel al siguiente nivel?
+          </h2>
+          <p className="mt-3 text-xs sm:text-sm text-indigo-100 max-w-xl mx-auto leading-relaxed">
+            Registra tu hotel en pocos segundos, obtén tu código de inquilino exclusivo y comienza a optimizar los tiempos
+            de asignación y limpieza.
+          </p>
+
+          <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <Link
+              href="/registro"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-xs font-bold bg-white text-indigo-700 hover:bg-indigo-50 shadow-lg active:scale-[0.98] transition-all"
             >
-              ¿Olvidaste tu contraseña?
+              <Building2 className="w-4 h-4" />
+              <span>Registrar Hotel Ahora</span>
+            </Link>
+
+            <Link
+              href="/login"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-xs font-semibold bg-indigo-700/50 hover:bg-indigo-700 text-white border border-indigo-400/30 active:scale-[0.98] transition-all"
+            >
+              <LogIn className="w-4 h-4" />
+              <span>Ya tengo cuenta</span>
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* Footer Público */}
+      <footer className="mt-auto border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0b0f19] py-8 text-xs text-slate-500 transition-colors">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+            <span className="font-semibold text-slate-700 dark:text-slate-300">AppHR</span>
+            <span>— © 2026 AppHR Technologies. Todos los derechos reservados.</span>
+          </div>
+
+          <div className="flex items-center gap-6">
+            <Link href="/login" className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">
+              Iniciar Sesión
+            </Link>
+            <Link href="/registro" className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">
+              Registrar Hotel
+            </Link>
+            <a href="#" className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">
+              Documentación
+            </a>
+            <a href="#" className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors">
+              Soporte
             </a>
           </div>
-
-          {/* Botón Iniciar Sesión */}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 rounded-xl text-xs transition-all shadow-lg shadow-indigo-600/25 active:scale-[0.98] disabled:opacity-50"
-          >
-            {loading ? 'Verificando...' : 'Iniciar Sesión'}
-          </button>
-        </form>
-
-        {/* Banner Inferior de Seguridad */}
-        <div className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-800/80 flex flex-col items-center justify-center gap-1.5 text-[10px] text-slate-500 dark:text-slate-400">
-          <div className="flex items-center gap-1.5">
-            <ShieldCheck className="w-3.5 h-3.5 text-slate-400" />
-            <span>Protegido con encriptación de 256 bits</span>
-          </div>
-          <div className="flex items-center gap-1 text-[9px] text-emerald-600 dark:text-emerald-400 font-semibold tracking-wider">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-pulse" />
-            VERIFICACIÓN DE SEGURIDAD ACTIVA
-          </div>
         </div>
-      </div>
-
-      {/* Footer */}
-      <footer className="mt-8 text-[11px] text-slate-500 flex gap-6">
-        <span>© 2026 AppHR Technologies</span>
-        <a href="#" className="hover:text-slate-700 dark:hover:text-slate-400">Soporte</a>
-        <a href="#" className="hover:text-slate-700 dark:hover:text-slate-400">Privacidad</a>
       </footer>
-    </main>
+    </div>
   );
 }

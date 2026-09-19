@@ -1,0 +1,5 @@
+project_id = "earlammmyhbcnkzlddzs"
+
+[functions.cambiar-password]
+verify_jwt = false
+entrypoint = "./supabase/functions/cambiar-password/cambiar-password.ts"

@@ -25,7 +25,7 @@ export default function HistorialPage() {
       const { data: { user } } = await supabase.auth.getUser();
 
       // Consultamos la tabla de historial real haciendo un join con rooms
-      let query = supabase
+      const query = supabase
         .from('historial_estados_habitacion')
         .select(`
           id,

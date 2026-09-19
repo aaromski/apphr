@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 import { 
@@ -22,29 +22,204 @@ import {
   Power
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { TipoPromedioChart, PersonalChart, BAR_COLORS } from './charts';
+import TiemposConfig from './tiempos-config';
+
+// Tipos de habitación disponibles para asignar a un lote
+const ROOM_TYPES = ['Estándar', 'Individual', 'Doble', 'Matrimonial', 'Suite', 'Familiar', 'Deluxe', 'Presidencial'];
+
+// Límite de habitaciones por lote para evitar creación masiva accidental
+const MAX_ROOMS_PER_BATCH = 200;
+
+// Construye la lista de números de habitación a partir de un rango (ej. 102 -> 107)
+const buildRoomRange = (fromRaw: string, toRaw: string): string[] => {
+  const from = fromRaw.trim();
+  const to = toRaw.trim();
+  if (!from) return [];
+  if (!to || to === from) return [from];
+
+  // Soporta prefijos (ej. "H101" -> "H105") preservando el ancho numérico
+  const mFrom = from.match(/^(.*?)(\d+)$/);
+  const mTo = to.match(/^(.*?)(\d+)$/);
+
+  if (mFrom && mTo && mFrom[1] === mTo[1]) {
+    const prefix = mFrom[1];
+    const width = mFrom[2].length;
+    const start = parseInt(mFrom[2], 10);
+    const end = parseInt(mTo[2], 10);
+    if (!isNaN(start) && !isNaN(end) && end >= start) {
+      const result: string[] = [];
+      for (let i = start; i <= end; i++) {
+        result.push(prefix + String(i).padStart(width, '0'));
+      }
+      return result;
+    }
+  }
+
+  // Fallback: rango numérico simple
+  const start = parseInt(from, 10);
+  const end = parseInt(to, 10);
+  if (!isNaN(start) && !isNaN(end) && end >= start) {
+    const result: string[] = [];
+    for (let i = start; i <= end; i++) result.push(String(i));
+    return result;
+  }
+
+  return [from];
+};
+
+// Límite de pisos por rango para evitar creación masiva accidental
+const MAX_ZONAS_PER_BATCH = 50;
+
+// Extrae el número de un nombre de piso (ej. "Piso 3" -> 3, "1" -> 1). null si es un nombre libre.
+const numericFloorOf = (nombre: string): number | null => {
+  const m = nombre.trim().match(/(\d+)/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return Number.isFinite(n) ? n : null;
+};
+
+// Calcula el siguiente número de piso esperado: la secuencia numérica debe ser
+// contigua desde 1. Si existen "Piso 1".."Piso 5", devuelve 6 (no se permiten saltos).
+const computeNextNumericFloor = (zonas: ZonaData[]): number => {
+  const numeros = new Set(
+    zonas
+      .map((z) => numericFloorOf(z.nombre || ''))
+      .filter((n): n is number => n !== null)
+  );
+  let n = 1;
+  while (numeros.has(n)) n++;
+  return n;
+};
+
+interface UsuarioData {
+  id: string;
+  nombre?: string | null;
+  email?: string | null;
+  role?: string | null;
+  activo?: boolean | null;
+}
+
+interface HabitacionData {
+  id: string;
+  room_number?: string | null;
+  room_type?: string | null;
+  zone?: string | null;
+  zona_id?: string | null;
+  status?: string | null;
+}
+
+interface ZonaData {
+  id: string;
+  nombre?: string | null;
+}
+
+// Filas de las tablas de métricas precomputadas (mantenidas por trigger)
+interface MetricResumen {
+  total_limpiezas: number;
+  suma_duracion_min: number;
+  sla_cumplidas: number;
+  sla_retrasadas: number;
+}
+
+interface MetricDetalle {
+  dimension: 'tipo' | 'zona' | 'personal';
+  clave: string;
+  nombre?: string | null;
+  limpiezas: number;
+  suma_duracion_min: number;
+  cumplidas: number;
+}
+
+interface AnalyticsData {
+  porTipo: { tipo: string; promedio: number; limpiezas: number; cumplidas: number; slaPct: number }[];
+  porZona: { zona: string; promedio: number; limpiezas: number; cumplidas: number; slaPct: number }[];
+  porPersonal: { id: string; nombre: string; promedio: number; limpiezas: number; cumplidas: number; slaPct: number }[];
+  totalLimpiezas: number;
+}
+
+interface KpisData {
+  tiempoPromedio: string;
+  habitacionesLimpias: string;
+  alertasSla: string;
+  personalActivo: string;
+}
+
+// Deriva KPIs y gráficos desde las tablas resumen O(1) del trigger
+function buildMetrics(
+  metric: MetricResumen | null,
+  detalle: MetricDetalle[],
+  roomsRows: { status?: string | null }[],
+  usersRows: { activo?: boolean | null }[]
+): { kpis: KpisData; analytics: AnalyticsData } {
+  const totalLimpiezas = metric?.total_limpiezas ?? 0;
+  const slaCumplidas = metric?.sla_cumplidas ?? 0;
+  const slaRetrasadas = metric?.sla_retrasadas ?? 0;
+  const tiempoPromedio =
+    totalLimpiezas > 0 && metric ? `${Math.round(metric.suma_duracion_min / totalLimpiezas)} min` : '--';
+
+  const toRow = (d: MetricDetalle) => ({
+    promedio: d.limpiezas ? Math.round(d.suma_duracion_min / d.limpiezas) : 0,
+    limpiezas: d.limpiezas,
+    cumplidas: d.cumplidas,
+    slaPct: d.limpiezas ? Math.round((d.cumplidas / d.limpiezas) * 100) : 0,
+  });
+
+  const porTipo = detalle
+    .filter((d) => d.dimension === 'tipo')
+    .map((d) => ({ tipo: d.clave, ...toRow(d) }))
+    .sort((a, b) => b.limpiezas - a.limpiezas);
+
+  const porZona = detalle
+    .filter((d) => d.dimension === 'zona')
+    .map((d) => ({ zona: d.clave, ...toRow(d) }))
+    .sort((a, b) => b.limpiezas - a.limpiezas);
+
+  const porPersonal = detalle
+    .filter((d) => d.dimension === 'personal')
+    .map((d) => ({ id: d.clave, nombre: d.nombre || 'Personal', ...toRow(d) }))
+    .sort((a, b) => b.limpiezas - a.limpiezas);
+
+  return {
+    kpis: {
+      tiempoPromedio,
+      habitacionesLimpias: `${roomsRows.filter((h) => (h.status || '').toLowerCase() === 'limpia/lista').length} / ${roomsRows.length}`,
+      alertasSla: `${slaRetrasadas} / ${slaCumplidas}`,
+      personalActivo: `${usersRows.filter((u) => u.activo !== false).length} Agentes`,
+    },
+    analytics: { porTipo, porZona, porPersonal, totalLimpiezas },
+  };
+}
 
 export default function AdminDashboardPage() {
   const router = useRouter();
   // Sección activa controlada por el menú lateral
   const [activeSection, setActiveSection] = useState<'dashboard' | 'parametrica' | 'usuarios'>('dashboard');
   // Pestaña interna (para la sección paramétrica / usuarios)
-  const [activeTab, setActiveTab] = useState<'zonas' | 'habitaciones' | 'usuarios'>('habitaciones');
+  const [activeTab, setActiveTab] = useState<'zonas' | 'habitaciones' | 'tiempos' | 'usuarios'>('habitaciones');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   
   // Estados de datos de Supabase
-  const [usuarios, setUsuarios] = useState<any[]>([]);
-  const [habitaciones, setHabitaciones] = useState<any[]>([]);
-  const [zonas, setZonas] = useState<any[]>([]);
+  const [usuarios, setUsuarios] = useState<UsuarioData[]>([]);
+  const [habitaciones, setHabitaciones] = useState<HabitacionData[]>([]);
+  const [zonas, setZonas] = useState<ZonaData[]>([]);
   
   // Estados para modales
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalType, setModalType] = useState<'zona' | 'habitacion' | 'usuario' | 'editarUsuario'>('habitacion');
+  const [modalType, setModalType] = useState<'zona' | 'editarZona' | 'habitacion' | 'usuario' | 'editarUsuario'>('habitacion');
   const [submitting, setSubmitting] = useState(false);
 
   // Campos de formularios
   const [nombreZona, setNombreZona] = useState('');
+  const [zonaMode, setZonaMode] = useState<'rango' | 'personalizado'>('rango');
+  const [zonaDesde, setZonaDesde] = useState('');
+  const [zonaHasta, setZonaHasta] = useState('');
+  const [zonaError, setZonaError] = useState('');
+  const [zonaEditId, setZonaEditId] = useState<string | null>(null);
+  const [zonaEditName, setZonaEditName] = useState('');
   const [roomNumber, setRoomNumber] = useState('');
+  const [roomNumberEnd, setRoomNumberEnd] = useState('');
   const [selectedZonaId, setSelectedZonaId] = useState('');
   const [roomType, setRoomType] = useState('Estándar');
   
@@ -53,6 +228,7 @@ export default function AdminDashboardPage() {
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [userRole, setUserRole] = useState('recepcionista');
+  const [userPassword, setUserPassword] = useState('');
 
   const [kpis, setKpis] = useState({
     tiempoPromedio: '--',
@@ -62,23 +238,20 @@ export default function AdminDashboardPage() {
   });
   const [hotelInfo, setHotelInfo] = useState<{ name?: string } | null>(null);
   const [adminProfile, setAdminProfile] = useState<{ nombre?: string; role?: string } | null>(null);
+  const [hotelId, setHotelId] = useState<string | null>(null);
 
-  // Desglose analítico de limpiezas (métricas SLA por tipo y por personal de limpieza)
+  // Desglose analítico de limpiezas (métricas de tiempos por tipo, zona y personal de limpieza)
   const [analytics, setAnalytics] = useState({
     porTipo: [] as { tipo: string; promedio: number; limpiezas: number; cumplidas: number; slaPct: number }[],
+    porZona: [] as { zona: string; promedio: number; limpiezas: number; cumplidas: number; slaPct: number }[],
     porPersonal: [] as { id: string; nombre: string; promedio: number; limpiezas: number; cumplidas: number; slaPct: number }[],
     totalLimpiezas: 0,
   });
 
-  useEffect(() => {
-    fetchAdminData();
-  }, []);
-
   const fetchAdminData = async () => {
-    setLoading(true);
-
     // 1. Usuario autenticado y su perfil (para el sidebar y el hotel)
     const { data: { user } } = await supabase.auth.getUser();
+    setLoading(true);
     let adminHotelId: string | null = null;
 
     if (user) {
@@ -107,128 +280,123 @@ export default function AdminDashboardPage() {
     let userQuery = supabase.from('profiles').select('*');
     let habQuery = supabase.from('rooms').select('*');
     let zonaQuery = supabase.from('zonas').select('*');
-    let histQuery = supabase
-      .from('historial_estados_habitacion')
-      .select(`
-        duracion_min,
-        cumplio_sla,
-        usuario_id,
-        rooms ( room_type ),
-        profiles ( nombre )
-      `)
-      .eq('estado_nuevo', 'Limpia/Lista');
+    let metQuery = supabase
+      .from('metricas_limpieza')
+      .select('total_limpiezas, suma_duracion_min, sla_cumplidas, sla_retrasadas');
+    let detQuery = supabase
+      .from('metricas_limpieza_detalle')
+      .select('dimension, clave, nombre, limpiezas, suma_duracion_min, cumplidas');
 
     if (adminHotelId) {
+      setHotelId(adminHotelId);
       userQuery = userQuery.eq('hotel_id', adminHotelId);
       habQuery = habQuery.eq('hotel_id', adminHotelId);
       zonaQuery = zonaQuery.eq('hotel_id', adminHotelId);
-      histQuery = histQuery.eq('hotel_id', adminHotelId);
+      metQuery = metQuery.eq('hotel_id', adminHotelId);
+      detQuery = detQuery.eq('hotel_id', adminHotelId);
     }
 
     const { data: userData } = await userQuery;
     const { data: habData } = await habQuery;
     const { data: zonaData } = await zonaQuery;
-    const { data: histData } = await histQuery;
+    const { data: metData } = await metQuery.maybeSingle();
+    const { data: detData } = await detQuery;
 
     if (userData) setUsuarios(userData);
     if (habData) setHabitaciones(habData);
     if (zonaData) setZonas(zonaData);
 
-    // 4. Métricas reales desde el historial: promedio, SLA y desglose analítico
-    const histRecords = (histData || []) as {
-      duracion_min: number | null;
-      cumplio_sla: boolean | null;
-      usuario_id: string | null;
-      rooms?: { room_type?: string | null } | { room_type?: string | null }[] | null;
-      profiles?: { nombre?: string | null } | { nombre?: string | null }[] | null;
-    }[];
-
-    const completas = histRecords.filter((h) => typeof h.duracion_min === 'number');
-
-    const getRoomType = (h: (typeof completas)[number]) => {
-      const rt = h.rooms;
-      if (Array.isArray(rt)) return rt[0]?.room_type || null;
-      return rt?.room_type || null;
-    };
-
-    const getPersonalNombre = (h: (typeof completas)[number]) => {
-      const p = h.profiles;
-      if (Array.isArray(p)) return p[0]?.nombre || null;
-      return p?.nombre || null;
-    };
-
-    // Promedio general
-    const totalLimpiezas = completas.length;
-    let tiempoPromedio = '--';
-    if (totalLimpiezas) {
-      const sum = completas.reduce((acc, h) => acc + (h.duracion_min || 0), 0);
-      tiempoPromedio = `${Math.round(sum / totalLimpiezas)} min`;
-    }
-
-    // Contadores SLA cumplidas vs retrasadas
-    const slaRetrasadas = completas.filter((h) => h.cumplio_sla === false).length;
-    const slaCumplidas = completas.filter((h) => h.cumplio_sla === true).length;
-
-    // Promedio por tipo de habitación
-    const porTipoMap = new Map<string, { sum: number; n: number; cum: number }>();
-    // Rendimiento por personal de limpieza
-    const porPersonalMap = new Map<string, { sum: number; n: number; cum: number; nombre: string }>();
-
-    completas.forEach((h) => {
-      const tipo = getRoomType(h) || 'Estándar';
-      const tipoBase = porTipoMap.get(tipo) || { sum: 0, n: 0, cum: 0 };
-      tipoBase.sum += h.duracion_min || 0;
-      tipoBase.n += 1;
-      if (h.cumplio_sla === true) tipoBase.cum += 1;
-      porTipoMap.set(tipo, tipoBase);
-
-      const key = h.usuario_id || 'desconocido';
-      const personalBase = porPersonalMap.get(key) || { sum: 0, n: 0, cum: 0, nombre: getPersonalNombre(h) || 'Personal' };
-      personalBase.sum += h.duracion_min || 0;
-      personalBase.n += 1;
-      if (h.cumplio_sla === true) personalBase.cum += 1;
-      porPersonalMap.set(key, personalBase);
-    });
-
-    const porTipo = [...porTipoMap.entries()]
-      .map(([tipo, e]) => ({
-        tipo,
-        promedio: Math.round(e.sum / e.n),
-        limpiezas: e.n,
-        cumplidas: e.cum,
-        slaPct: Math.round((e.cum / e.n) * 100),
-      }))
-      .sort((a, b) => b.limpiezas - a.limpiezas);
-
-    const porPersonal = [...porPersonalMap.entries()]
-      .map(([id, e]) => ({
-        id,
-        nombre: e.nombre,
-        promedio: Math.round(e.sum / e.n),
-        limpiezas: e.n,
-        cumplidas: e.cum,
-        slaPct: Math.round((e.cum / e.n) * 100),
-      }))
-      .sort((a, b) => b.limpiezas - a.limpiezas);
-
-    setAnalytics({ porTipo, porPersonal, totalLimpiezas });
-
-    // 5. KPIs calculados desde la BD
-    const roomsData = (habData || []) as { status?: string | null }[];
-    const usersData = (userData || []) as { activo?: boolean | null }[];
-    setKpis({
-      tiempoPromedio,
-      habitacionesLimpias: `${roomsData.filter((h) => (h.status || '').toLowerCase() === 'limpia/lista').length} / ${roomsData.length}`,
-      alertasSla: `${slaRetrasadas} / ${slaCumplidas}`,
-      personalActivo: `${usersData.filter((u) => u.activo !== false).length} Agentes`
-    });
+    // 4. Métricas precomputadas (tablas mantenidas por trigger) + KPIs
+    const result = buildMetrics(
+      (metData as MetricResumen | null) ?? null,
+      (detData as MetricDetalle[]) || [],
+      (habData || []) as { status?: string | null }[],
+      (userData || []) as { activo?: boolean | null }[]
+    );
+    setAnalytics(result.analytics);
+    setKpis(result.kpis);
 
     setLoading(false);
   };
 
+  useEffect(() => {
+    setTimeout(() => {
+      fetchAdminData();
+    }, 0);
+  }, []);
+
+  // Actualiza KPIs y gráficos desde las tablas resumen O(1) del trigger
+  const refreshLiveMetrics = useCallback(async () => {
+    if (!hotelId) return;
+
+    const { data: metData } = await supabase
+      .from('metricas_limpieza')
+      .select('total_limpiezas, suma_duracion_min, sla_cumplidas, sla_retrasadas')
+      .eq('hotel_id', hotelId)
+      .maybeSingle();
+    const { data: detData } = await supabase
+      .from('metricas_limpieza_detalle')
+      .select('dimension, clave, nombre, limpiezas, suma_duracion_min, cumplidas')
+      .eq('hotel_id', hotelId);
+    const { data: roomsData } = await supabase
+      .from('rooms')
+      .select('status')
+      .eq('hotel_id', hotelId);
+    const { data: usersData } = await supabase
+      .from('profiles')
+      .select('activo')
+      .eq('hotel_id', hotelId);
+
+    const result = buildMetrics(
+      (metData as MetricResumen | null) ?? null,
+      (detData as MetricDetalle[]) || [],
+      (roomsData || []) as { status?: string | null }[],
+      (usersData || []) as { activo?: boolean | null }[]
+    );
+    setKpis(result.kpis);
+    setAnalytics(result.analytics);
+  }, [hotelId]);
+
+  // Suscripción en tiempo real sobre las tablas resumen y los estados de habitación
+  useEffect(() => {
+    if (!hotelId) return;
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRefresh = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        refreshLiveMetrics();
+      }, 500);
+    };
+
+    const channel = supabase
+      .channel(`admin-live-${hotelId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'metricas_limpieza', filter: `hotel_id=eq.${hotelId}` },
+        scheduleRefresh
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'metricas_limpieza_detalle', filter: `hotel_id=eq.${hotelId}` },
+        scheduleRefresh
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'rooms', filter: `hotel_id=eq.${hotelId}` },
+        scheduleRefresh
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+      if (timer) clearTimeout(timer);
+    };
+  }, [hotelId, refreshLiveMetrics]);
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
-    router.push('/login');
+    router.push('/');
   };
 
   // --- FUNCIÓN PARA CAMBIAR ESTADO (ACTIVAR / DESACTIVAR) ---
@@ -250,6 +418,13 @@ export default function AdminDashboardPage() {
   const handleUpdateUsuario = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedUserId || !userName.trim()) return;
+
+    const nuevaPassword = userPassword.trim();
+    if (nuevaPassword && nuevaPassword.length < 6) {
+      alert('La nueva contraseña debe tener al menos 6 caracteres.');
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -263,17 +438,69 @@ export default function AdminDashboardPage() {
 
       if (error) {
         alert('Error al actualizar usuario: ' + error.message);
-      } else {
-        alert('Usuario modificado correctamente.');
-        setIsModalOpen(false);
-        setSelectedUserId(null);
-        setUserName('');
-        setUserEmail('');
-        setUserRole('recepcionista');
-        fetchAdminData();
+        setSubmitting(false);
+        return;
       }
-    } catch (err: any) {
-      alert('Ocurrió un error: ' + err.message);
+
+      // Cambio de contraseña (intenta Edge Function y si no está desplegada usa RPC Postgres)
+      if (nuevaPassword) {
+        let passwordActualizada = false;
+        let mensajeError = '';
+
+        // 1. Intentar mediante la Edge Function 'cambiar-password'
+        try {
+          const { data: fnData, error: fnError } = await supabase.functions.invoke('bright-worker', {
+            body: { userId: selectedUserId, newPassword: nuevaPassword }
+          });
+
+          if (!fnError && fnData && !fnData.error) {
+            passwordActualizada = true;
+          } else {
+            mensajeError = fnError?.message || fnData?.error || '';
+          }
+        } catch (e) {
+          mensajeError = e instanceof Error ? e.message : String(e);
+        }
+
+        // 2. Si la Edge Function falló o no está desplegada, intentar vía función SQL RPC
+        if (!passwordActualizada) {
+          try {
+            const { data: rpcData, error: rpcError } = await supabase.rpc('admin_cambiar_password', {
+              p_user_id: selectedUserId,
+              p_new_password: nuevaPassword
+            });
+
+            if (!rpcError && (!rpcData || rpcData.success !== false)) {
+              passwordActualizada = true;
+            } else if (rpcError || (rpcData && rpcData.error)) {
+              mensajeError = rpcError?.message || rpcData?.error || mensajeError;
+            }
+          } catch {
+            // mantener mensaje de error previo
+          }
+        }
+
+        if (!passwordActualizada) {
+          alert(
+            'El perfil se actualizó, pero no se pudo cambiar la contraseña:\n' +
+            mensajeError +
+            '\n\nPara resolverlo, despliega la Edge Function "cambiar-password" o ejecuta la migración SQL "20260919_admin_cambiar_password.sql" en el SQL Editor de Supabase.'
+          );
+          setSubmitting(false);
+          return;
+        }
+      }
+
+      alert(nuevaPassword ? 'Usuario y contraseña actualizados correctamente.' : 'Usuario modificado correctamente.');
+      setIsModalOpen(false);
+      setSelectedUserId(null);
+      setUserName('');
+      setUserEmail('');
+      setUserRole('recepcionista');
+      setUserPassword('');
+      fetchAdminData();
+    } catch (err) {
+      alert('Ocurrió un error: ' + (err instanceof Error ? err.message : String(err)));
     }
     setSubmitting(false);
   };
@@ -281,48 +508,210 @@ export default function AdminDashboardPage() {
   // --- CREACIONES ---
   const handleCreateZona = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!nombreZona.trim()) return;
+    setZonaError('');
     setSubmitting(true);
+
+    const existentesLower = zonas.map((z) => (z.nombre || '').trim().toLowerCase());
+    const numerosExistentes = new Set(
+      zonas
+        .map((z) => numericFloorOf(z.nombre || ''))
+        .filter((n): n is number => n !== null)
+    );
+    const siguiente = computeNextNumericFloor(zonas);
+
+    let nombresNuevos: string[] = [];
+    let modo = '';
+    let errorMsg = '';
+
+    if (zonaMode === 'rango') {
+      // ---- MODO RANGO NUMÉRICO ----
+      const desde = Math.floor(Number(zonaDesde));
+      const hasta = Math.floor(Number(zonaHasta));
+
+      if (!Number.isInteger(desde) || !Number.isInteger(hasta) || desde < 1 || hasta < desde) {
+        errorMsg = 'Ingresa un rango numérico válido (Desde y Hasta, ambos ≥ 1 y Hasta ≥ Desde).';
+      } else if (hasta - desde + 1 > MAX_ZONAS_PER_BATCH) {
+        errorMsg = `El rango genera ${hasta - desde + 1} pisos. El máximo permitido por lote es ${MAX_ZONAS_PER_BATCH}.`;
+      } else if (desde !== siguiente) {
+        errorMsg = numerosExistentes.size > 0
+          ? `Los pisos numéricos deben ser secuenciales y no pueden saltarse números. Ya existen del 1 al ${siguiente - 1}; el siguiente rango debe comenzar estrictamente en ${siguiente}.`
+          : `Los pisos numéricos deben comenzar en 1. El siguiente número disponible es ${siguiente}.`;
+      } else {
+        modo = 'Rango numérico';
+        nombresNuevos = Array.from({ length: hasta - desde + 1 }, (_, i) => `Piso ${desde + i}`);
+      }
+    } else {
+      // ---- MODO PERSONALIZADO / ESPECIAL ----
+      const nombre = nombreZona.trim();
+      if (!nombre) {
+        errorMsg = 'Escribe el nombre del piso o zona especial.';
+      } else {
+        const numero = numericFloorOf(nombre);
+        const yaExiste = existentesLower.includes(nombre.toLowerCase());
+        const duplicadoNumerico = numero !== null && numerosExistentes.has(numero);
+
+        if (yaExiste || duplicadoNumerico) {
+          errorMsg = `Ya existe un piso llamado "${nombre}". Usa otro nombre para evitar duplicados.`;
+        } else if (numero !== null && numero > siguiente) {
+          errorMsg = `Los pisos numéricos deben ser secuenciales. El siguiente número disponible es ${siguiente}.`;
+        } else {
+          modo = 'Personalizado';
+          nombresNuevos = [nombre];
+        }
+      }
+    }
+
+    if (errorMsg) {
+      setZonaError(errorMsg);
+      setSubmitting(false);
+      return;
+    }
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user) { setSubmitting(false); return; }
 
       const { data: profileData } = await supabase.from('profiles').select('hotel_id').eq('id', user.id).single();
-      if (!profileData?.hotel_id) return;
+      if (!profileData?.hotel_id) { setSubmitting(false); return; }
 
-      const { error } = await supabase.from('zonas').insert([{ nombre: nombreZona, hotel_id: profileData.hotel_id }]);
-      if (error) alert('Error: ' + error.message);
-      else { setNombreZona(''); setIsModalOpen(false); fetchAdminData(); }
-    } catch (err: any) { alert('Error: ' + err.message); }
+      const rows = nombresNuevos.map((nombre) => ({ nombre, hotel_id: profileData.hotel_id! }));
+      const { error } = await supabase.from('zonas').insert(rows);
+
+      if (error) {
+        alert('Error: ' + error.message);
+      } else if (modo === 'Rango numérico') {
+        alert(
+          `Pisos creados en secuencia: ${nombresNuevos.join(', ')} (${nombresNuevos.length} pisos en total).`
+        );
+        setNombreZona('');
+        setZonaDesde('');
+        setZonaHasta('');
+        setZonaMode('rango');
+        setIsModalOpen(false);
+        fetchAdminData();
+      } else {
+        alert(`Piso creado correctamente: ${nombresNuevos.join(', ')}`);
+        setNombreZona('');
+        setZonaDesde('');
+        setZonaHasta('');
+        setZonaMode('rango');
+        setIsModalOpen(false);
+        fetchAdminData();
+      }
+    } catch (err) {
+      alert('Error: ' + (err instanceof Error ? err.message : String(err)));
+    }
+    setSubmitting(false);
+  };
+
+  // --- EDICIÓN DE ZONA / PISO (solo nombre, sin eliminar por integridad histórica) ---
+  const handleUpdateZona = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!zonaEditId || !zonaEditName.trim()) return;
+
+    const duplicado = zonas.some(
+      (z) => z.id !== zonaEditId && (z.nombre || '').trim().toLowerCase() === zonaEditName.trim().toLowerCase()
+    );
+    if (duplicado) {
+      alert('Ya existe otro piso con ese nombre.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const { error } = await supabase
+        .from('zonas')
+        .update({ nombre: zonaEditName.trim() })
+        .eq('id', zonaEditId);
+
+      if (error) {
+        alert('Error: ' + error.message);
+      } else {
+        // Mantener el campo denormalizado "zone" de las habitaciones sincronizado
+        await supabase
+          .from('rooms')
+          .update({ zone: zonaEditName.trim() })
+          .eq('zona_id', zonaEditId);
+
+        alert('Piso actualizado correctamente.');
+        setZonaEditId(null);
+        setZonaEditName('');
+        setIsModalOpen(false);
+        fetchAdminData();
+      }
+    } catch (err) {
+      alert('Error: ' + (err instanceof Error ? err.message : String(err)));
+    }
     setSubmitting(false);
   };
 
   const handleCreateHabitacion = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!roomNumber.trim() || !selectedZonaId) return;
+
+    // Generar el lote de números a partir del rango indicado
+    const numeros = buildRoomRange(roomNumber, roomNumberEnd);
+
+    if (numeros.length === 0) {
+      alert('Ingresa al menos un número de habitación válido.');
+      return;
+    }
+
+    if (numeros.length > MAX_ROOMS_PER_BATCH) {
+      alert(`El rango genera ${numeros.length} habitaciones. El máximo permitido por lote es ${MAX_ROOMS_PER_BATCH}.`);
+      return;
+    }
+
     setSubmitting(true);
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user) { setSubmitting(false); return; }
 
       const { data: profileData } = await supabase.from('profiles').select('hotel_id').eq('id', user.id).single();
-      if (!profileData?.hotel_id) return;
+      if (!profileData?.hotel_id) { setSubmitting(false); return; }
 
       const zonaSeleccionada = zonas.find(z => z.id === selectedZonaId);
-      const { error } = await supabase.from('rooms').insert([{
-        room_number: roomNumber,
+      const zonaNombre = zonaSeleccionada ? zonaSeleccionada.nombre : '';
+
+      // Omitir números que ya existan para evitar duplicados
+      const existentes = new Set(habitaciones.map((h) => String(h.room_number)));
+      const nuevos = numeros.filter(n => !existentes.has(n));
+      const duplicados = numeros.filter(n => existentes.has(n));
+
+      if (nuevos.length === 0) {
+        alert('Todas las habitaciones del rango ya existen.');
+        setSubmitting(false);
+        return;
+      }
+
+      const rows = nuevos.map(numero => ({
+        room_number: numero,
         hotel_id: profileData.hotel_id,
         zona_id: selectedZonaId,
-        zone: zonaSeleccionada ? zonaSeleccionada.nombre : '',
+        zone: zonaNombre,
         room_type: roomType,
         status: 'Disponible'
-      }]);
+      }));
 
-      if (error) alert('Error: ' + error.message);
-      else { setRoomNumber(''); setSelectedZonaId(''); setIsModalOpen(false); fetchAdminData(); }
-    } catch (err: any) { alert('Error: ' + err.message); }
+      const { error } = await supabase.from('rooms').insert(rows);
+
+      if (error) {
+        alert('Error: ' + error.message);
+      } else {
+        const resumen = duplicados.length
+          ? `${nuevos.length} habitación(es) creada(s). Se omitieron ${duplicados.length} que ya existían.`
+          : `${nuevos.length} habitación(es) creada(s) como "${roomType}".`;
+        alert(resumen);
+        setRoomNumber('');
+        setRoomNumberEnd('');
+        setSelectedZonaId('');
+        setIsModalOpen(false);
+        fetchAdminData();
+      }
+    } catch (err) {
+      alert('Error: ' + (err instanceof Error ? err.message : String(err)));
+    }
     setSubmitting(false);
   };
 
@@ -354,7 +743,9 @@ export default function AdminDashboardPage() {
         setIsModalOpen(false);
         fetchAdminData();
       }
-    } catch (err: any) { alert('Error: ' + err.message); }
+    } catch (err) {
+      alert('Error: ' + (err instanceof Error ? err.message : String(err)));
+    }
     setSubmitting(false);
   };
 
@@ -481,11 +872,11 @@ export default function AdminDashboardPage() {
 
                 <div className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800/80 p-5 rounded-2xl shadow-sm">
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Alertas SLA</span>
+                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Alertas de Tiempo Límite</span>
                     <div className="p-2 rounded-xl bg-amber-500/10 text-amber-500"><AlertTriangle className="w-4 h-4" /></div>
                   </div>
                   <h3 className="text-2xl font-black text-slate-900 dark:text-white">{kpis.alertasSla}</h3>
-                  <p className="text-[11px] text-amber-500 font-medium mt-1">Retrasadas / Cumplidas (SLA)</p>
+                  <p className="text-[11px] text-amber-500 font-medium mt-1">Retrasadas / Cumplidas a tiempo</p>
                 </div>
 
                 <div className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800/80 p-5 rounded-2xl shadow-sm">
@@ -513,24 +904,50 @@ export default function AdminDashboardPage() {
                   {analytics.porTipo.length === 0 ? (
                     <p className="text-xs text-slate-400 py-6 text-center">Sin limpiezas registradas todavía.</p>
                   ) : (
-                    <div className="space-y-3.5">
-                      {analytics.porTipo.map((t) => (
-                        <div key={t.tipo} className="flex items-center justify-between gap-3">
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-semibold text-slate-900 dark:text-white truncate">{t.tipo}</p>
-                            <div className="h-1.5 mt-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full rounded-full ${t.slaPct >= 80 ? 'bg-emerald-500' : t.slaPct >= 60 ? 'bg-amber-500' : 'bg-rose-500'}`}
-                                style={{ width: `${t.slaPct}%` }}
-                              />
-                            </div>
-                          </div>
-                          <div className="text-right shrink-0">
-                            <p className="text-xs font-black text-slate-900 dark:text-white">{t.promedio} min</p>
-                            <p className="text-[10px] text-slate-400">{t.limpiezas} limpiezas • {t.slaPct}% SLA</p>
-                          </div>
-                        </div>
-                      ))}
+                    <div>
+                      <TipoPromedioChart data={analytics.porTipo} />
+                      <div className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1">
+                        {analytics.porTipo.map((t, i) => (
+                          <span key={t.tipo} className="text-[10px] text-slate-500 flex items-center gap-1">
+                            <span className="inline-block w-2 h-2 rounded-full" style={{ background: BAR_COLORS[i % BAR_COLORS.length] }} />
+                            {t.tipo}: {t.promedio} min · A Tiempo {t.slaPct}%
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Rendimiento por zona / piso */}
+                <div className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800/80 rounded-2xl p-5 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900 dark:text-white">Rendimiento por Zona</h3>
+                      <p className="text-[11px] text-slate-500 mt-0.5">Tiempo promedio y cumplimiento a tiempo por zona / piso</p>
+                    </div>
+                    <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-500"><Building className="w-4 h-4" /></div>
+                  </div>
+
+                  {analytics.porZona.length === 0 ? (
+                    <p className="text-xs text-slate-400 py-6 text-center">Sin limpiezas registradas todavía.</p>
+                  ) : (
+                    <div>
+                      <TipoPromedioChart
+                        data={analytics.porZona.map((z) => ({
+                          tipo: z.zona,
+                          promedio: z.promedio,
+                          limpiezas: z.limpiezas,
+                          slaPct: z.slaPct,
+                        }))}
+                      />
+                      <div className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1">
+                        {analytics.porZona.map((z, i) => (
+                          <span key={z.zona} className="text-[10px] text-slate-500 flex items-center gap-1">
+                            <span className="inline-block w-2 h-2 rounded-full" style={{ background: BAR_COLORS[i % BAR_COLORS.length] }} />
+                            {z.zona}: {z.promedio} min · A Tiempo {z.slaPct}%
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -540,7 +957,7 @@ export default function AdminDashboardPage() {
                   <div className="flex items-center justify-between mb-4">
                     <div>
                       <h3 className="text-sm font-bold text-slate-900 dark:text-white">Rendimiento por Personal</h3>
-                      <p className="text-[11px] text-slate-500 mt-0.5">Tiempo promedio y cumplimiento de SLA</p>
+                      <p className="text-[11px] text-slate-500 mt-0.5">Tiempo promedio y cumplimiento a tiempo</p>
                     </div>
                     <div className="p-2 rounded-xl bg-blue-500/10 text-blue-500"><UserCheck className="w-4 h-4" /></div>
                   </div>
@@ -548,26 +965,15 @@ export default function AdminDashboardPage() {
                   {analytics.porPersonal.length === 0 ? (
                     <p className="text-xs text-slate-400 py-6 text-center">Sin limpiezas registradas todavía.</p>
                   ) : (
-                    <div className="space-y-3.5">
-                      {analytics.porPersonal.map((c) => (
-                        <div key={c.id} className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                            <div className="w-7 h-7 rounded-full bg-indigo-600/10 text-indigo-500 flex items-center justify-center font-bold text-[10px] shrink-0">
-                              {c.nombre.substring(0, 2).toUpperCase()}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="text-xs font-semibold text-slate-900 dark:text-white truncate">{c.nombre}</p>
-                              <p className="text-[10px] text-slate-400">{c.limpiezas} limpiezas • {c.slaPct}% SLA cumplido</p>
-                            </div>
-                          </div>
-                          <div className="text-right shrink-0">
-                            <p className="text-xs font-black text-slate-900 dark:text-white">{c.promedio} min</p>
-                            <p className={`text-[10px] ${c.slaPct >= 80 ? 'text-emerald-500' : c.slaPct >= 60 ? 'text-amber-500' : 'text-rose-500'}`}>
-                              {c.cumplidas}/{c.limpiezas} cumplidas
-                            </p>
-                          </div>
-                        </div>
-                      ))}
+                    <div>
+                      <PersonalChart data={analytics.porPersonal} />
+                      <div className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1">
+                        {analytics.porPersonal.map((c) => (
+                          <span key={c.id} className="text-[10px] text-slate-500 flex items-center gap-1">
+                            {c.nombre}: {c.promedio} min · {c.cumplidas}/{c.limpiezas} a tiempo
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -591,7 +997,13 @@ export default function AdminDashboardPage() {
                     onClick={() => { setActiveTab('habitaciones'); setActiveSection('parametrica'); }}
                     className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${activeTab === 'habitaciones' ? 'bg-white dark:bg-[#111827] text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'}`}
                   >
-                    Habitaciones & Inventario
+                    Habitaciones
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('tiempos'); setActiveSection('parametrica'); }}
+                    className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${activeTab === 'tiempos' ? 'bg-white dark:bg-[#111827] text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'}`}
+                  >
+                    Tiempos / Controles
                   </button>
                   <button
                     onClick={() => { setActiveTab('usuarios'); setActiveSection('usuarios'); }}
@@ -602,6 +1014,8 @@ export default function AdminDashboardPage() {
                 </div>
 
                 <div className="flex items-center gap-3 w-full sm:w-auto">
+                  {activeTab !== 'tiempos' && (
+                    <>
                   <div className="relative flex-1 sm:w-64">
                     <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
@@ -615,9 +1029,16 @@ export default function AdminDashboardPage() {
 
                   <button 
                     onClick={() => {
-                      if (activeTab === 'zonas') setModalType('zona');
+                      if (activeTab === 'zonas') {
+                        setModalType('zona');
+                        setNombreZona('');
+                        setZonaDesde('');
+                        setZonaHasta('');
+                        setZonaMode('rango');
+                        setZonaError('');
+                      }
                       else if (activeTab === 'habitaciones') setModalType('habitacion');
-                      else { setModalType('usuario'); setUserName(''); setUserEmail(''); setUserRole('recepcionista'); }
+                      else { setModalType('usuario'); setUserName(''); setUserEmail(''); setUserRole('recepcionista'); setUserPassword(''); }
                       setIsModalOpen(true);
                     }}
                     className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-4 py-2 rounded-xl text-xs flex items-center gap-2 transition-all shadow-md shadow-indigo-600/20 whitespace-nowrap"
@@ -625,8 +1046,13 @@ export default function AdminDashboardPage() {
                     <Plus className="w-4 h-4" />
                     {activeTab === 'usuarios' ? 'Nuevo Usuario' : activeTab === 'habitaciones' ? 'Nueva Habitación' : 'Nueva Zona'}
                   </button>
+                    </>
+                  )}
                 </div>
               </div>
+
+              {/* CONFIGURACIÓN DE TIEMPOS Y CONTROLES */}
+              {activeTab === 'tiempos' && <TiemposConfig />}
 
               {/* TABLA DE USUARIOS */}
               {activeTab === 'usuarios' && (
@@ -647,7 +1073,7 @@ export default function AdminDashboardPage() {
                       ) : filteredData().length === 0 ? (
                         <tr><td colSpan={5} className="py-8 text-center text-slate-500">No hay usuarios registrados.</td></tr>
                       ) : (
-                        filteredData().map((usr) => {
+                        (filteredData() as UsuarioData[]).map((usr) => {
                           const isActivo = usr.activo !== false;
                           return (
                             <tr key={usr.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
@@ -679,6 +1105,7 @@ export default function AdminDashboardPage() {
                                     setSelectedUserId(usr.id);
                                     setUserName(usr.nombre || '');
                                     setUserRole(usr.role || 'recepcionista');
+                                    setUserPassword('');
                                     setModalType('editarUsuario');
                                     setIsModalOpen(true);
                                   }}
@@ -722,7 +1149,10 @@ export default function AdminDashboardPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200 dark:divide-slate-800/60 text-xs">
-                      {filteredData().map((room) => (
+                      {filteredData().length === 0 ? (
+                        <tr><td colSpan={4} className="py-8 text-center text-slate-500">No hay habitaciones registradas.</td></tr>
+                      ) : (
+                        (filteredData() as HabitacionData[]).map((room) => (
                         <tr key={room.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
                           <td className="py-4 px-4 font-semibold text-slate-900 dark:text-white flex items-center gap-2.5">
                             <div className="w-7 h-7 rounded-lg bg-indigo-600/10 text-indigo-500 flex items-center justify-center font-bold text-xs"><DoorClosed className="w-3.5 h-3.5" /></div>
@@ -736,27 +1166,56 @@ export default function AdminDashboardPage() {
                           <td className="py-4 px-4 font-medium text-indigo-500">{room.zone || 'Sin zona'}</td>
                           <td className="py-4 px-4 text-slate-500 dark:text-slate-400">{room.room_type || 'Estándar'}</td>
                         </tr>
-                      ))}
+                      ))
+                    )}
                     </tbody>
                   </table>
                 </div>
               )}
 
-              {/* TABLA DE ZONAS */}
+              {/* TABLA DE ZONAS / PISOS */}
               {activeTab === 'zonas' && (
                 <div className="overflow-x-auto pt-4">
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
                         <th className="pb-3 px-4">Nombre de Zona / Piso</th>
+                        <th className="pb-3 px-4">Habitaciones Asociadas</th>
+                        <th className="pb-3 px-4 text-right">Acciones</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200 dark:divide-slate-800/60 text-xs">
-                      {filteredData().map((zona) => (
-                        <tr key={zona.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
-                          <td className="py-4 px-4 font-semibold text-slate-900 dark:text-white">{zona.nombre}</td>
-                        </tr>
-                      ))}
+                      {filteredData().length === 0 ? (
+                        <tr><td colSpan={3} className="py-8 text-center text-slate-500">No hay zonas registradas.</td></tr>
+                      ) : (
+                        (filteredData() as ZonaData[]).map((zona) => {
+                          const cantidad = habitaciones.filter((h) => h.zona_id === zona.id).length;
+                          return (
+                            <tr key={zona.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
+                              <td className="py-4 px-4 font-semibold text-slate-900 dark:text-white">{zona.nombre}</td>
+                              <td className="py-4 px-4">
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-500/10 text-indigo-500 border border-indigo-500/20">
+                                  {cantidad} {cantidad === 1 ? 'habitación' : 'habitaciones'}
+                                </span>
+                              </td>
+                              <td className="py-4 px-4 text-right">
+                                <button
+                                  onClick={() => {
+                                    setZonaEditId(zona.id);
+                                    setZonaEditName(zona.nombre || '');
+                                    setModalType('editarZona');
+                                    setIsModalOpen(true);
+                                  }}
+                                  className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-indigo-500 hover:bg-indigo-500 hover:text-white rounded-lg transition-colors font-medium inline-flex items-center gap-1"
+                                  title="Modificar nombre del piso"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" /> Modificar
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -774,8 +1233,9 @@ export default function AdminDashboardPage() {
           <div className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 w-full max-w-md rounded-2xl p-6 shadow-2xl relative animate-in fade-in zoom-in-95 duration-200">
             
             <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-slate-800 mb-5">
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+<h3 className="text-base font-bold text-slate-900 dark:text-white">
                 {modalType === 'zona' && 'Registrar Nueva Zona / Piso'}
+                {modalType === 'editarZona' && 'Modificar Nombre del Piso'}
                 {modalType === 'habitacion' && 'Crear Nueva Habitación'}
                 {modalType === 'usuario' && 'Registrar Nuevo Usuario'}
                 {modalType === 'editarUsuario' && 'Modificar Datos de Usuario'}
@@ -787,10 +1247,93 @@ export default function AdminDashboardPage() {
 
             {modalType === 'zona' && (
               <form onSubmit={handleCreateZona} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Nombre del Piso o Zona</label>
-                  <input type="text" value={nombreZona} onChange={(e) => setNombreZona(e.target.value)} placeholder="Ej. Planta Baja" className="w-full bg-slate-50 dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500" required />
+                {/* Selector de modo de creación */}
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setZonaMode('rango'); setZonaError(''); }}
+                    className={`px-3 py-2 rounded-xl text-xs font-semibold transition-all border ${
+                      zonaMode === 'rango'
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-md'
+                        : 'bg-slate-50 dark:bg-[#0b0f19] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800'
+                    }`}
+                  >
+                    Rango Numérico
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setZonaMode('personalizado'); setZonaError(''); }}
+                    className={`px-3 py-2 rounded-xl text-xs font-semibold transition-all border ${
+                      zonaMode === 'personalizado'
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-md'
+                        : 'bg-slate-50 dark:bg-[#0b0f19] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800'
+                    }`}
+                  >
+                    Especial / Personalizado
+                  </button>
                 </div>
+
+                {zonaMode === 'rango' ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Desde</label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={zonaDesde}
+                          onChange={(e) => { setZonaDesde(e.target.value); setZonaError(''); }}
+                          placeholder={`Ej. ${computeNextNumericFloor(zonas)}`}
+                          className="w-full bg-slate-50 dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Hasta</label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={zonaHasta}
+                          onChange={(e) => { setZonaHasta(e.target.value); setZonaError(''); }}
+                          placeholder="Ej. 5"
+                          className="w-full bg-slate-50 dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
+                          required
+                        />
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      El sistema genera automáticamente los pisos como <strong>Piso N</strong> en orden.
+                      La secuencia numérica es obligatoria: actualmente el siguiente número disponible es{' '}
+                      <strong className="text-indigo-500">{computeNextNumericFloor(zonas)}</strong>,
+                      por lo que el rango debe comenzar estrictamente ahí (sin saltos) y no puede repetir pisos existentes.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Nombre del Piso o Zona</label>
+                      <input
+                        type="text"
+                        value={nombreZona}
+                        onChange={(e) => { setNombreZona(e.target.value); setZonaError(''); }}
+                        placeholder="Ej. Planta Baja, PB, Mezzanina"
+                        className="w-full bg-slate-50 dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
+                        required
+                      />
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Para nombres libres sin número (ej. Planta Baja, PB o Mezzanina). No se admiten nombres
+                      repetidos ni pisos numéricos fuera de la secuencia.
+                    </p>
+                  </>
+                )}
+
+                {zonaError && (
+                  <div className="bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-300 rounded-xl px-3 py-2.5 text-[11px] font-medium">
+                    {zonaError}
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-2 pt-3">
                   <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-semibold">Cancelar</button>
                   <button type="submit" disabled={submitting} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/25">Guardar</button>
@@ -798,22 +1341,62 @@ export default function AdminDashboardPage() {
               </form>
             )}
 
+            {modalType === 'editarZona' && (
+              <form onSubmit={handleUpdateZona} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Nombre del Piso o Zona</label>
+                  <input
+                    type="text"
+                    value={zonaEditName}
+                    onChange={(e) => setZonaEditName(e.target.value)}
+                    placeholder="Ej. Piso 1"
+                    className="w-full bg-slate-50 dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500"
+                    required
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Solo se permite corregir el tipeo del nombre. Los pisos no pueden eliminarse para proteger el historial;
+                    las habitaciones asociadas se actualizan automáticamente.
+                  </p>
+                </div>
+                <div className="flex justify-end gap-2 pt-3">
+                  <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-semibold">Cancelar</button>
+                  <button type="submit" disabled={submitting} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/25">Guardar Cambios</button>
+                </div>
+              </form>
+            )}
+
             {modalType === 'habitacion' && (
               <form onSubmit={handleCreateHabitacion} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Número de Habitación</label>
-                  <input type="text" value={roomNumber} onChange={(e) => setRoomNumber(e.target.value)} placeholder="Ej. 101" className="w-full bg-slate-50 dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500" required />
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Número Inicial</label>
+                    <input type="text" value={roomNumber} onChange={(e) => setRoomNumber(e.target.value)} placeholder="Ej. 102" className="w-full bg-slate-50 dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500" required />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Número Final (opcional)</label>
+                    <input type="text" value={roomNumberEnd} onChange={(e) => setRoomNumberEnd(e.target.value)} placeholder="Ej. 107" className="w-full bg-slate-50 dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500" />
+                  </div>
                 </div>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Para una sola habitación deja el número final vacío. Para un lote indica el rango: 102 y 107 crea 102, 103, 104, 105, 106 y 107.
+                </p>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Zona / Piso</label>
-                  <select value={selectedZonaId} onChange={(e) => setSelectedZonaId(e.target.value)} className="w-full bg-slate-50 dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500" required>
+                  <label className="block text-sm font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Zona / Piso</label>
+                  <select value={selectedZonaId} onChange={(e) => setSelectedZonaId(e.target.value)} className="w-full bg-slate-50 dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500" required>
                     <option value="">Selecciona una zona...</option>
                     {zonas.map((z) => (<option key={z.id} value={z.id}>{z.nombre}</option>))}
                   </select>
                 </div>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Tipo de Habitación</label>
+                  <select value={roomType} onChange={(e) => setRoomType(e.target.value)} className="w-full bg-slate-50 dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500" required>
+                    {ROOM_TYPES.map((t) => (<option key={t} value={t}>{t}</option>))}
+                  </select>
+                  <p className="text-xs text-slate-400 mt-1">El tipo seleccionado se aplicará a todas las habitaciones del lote.</p>
+                </div>
                 <div className="flex justify-end gap-2 pt-3">
-                  <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-semibold">Cancelar</button>
-                  <button type="submit" disabled={submitting} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md shadow-indigo-600/25">Crear</button>
+                  <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl text-sm font-semibold">Cancelar</button>
+                  <button type="submit" disabled={submitting} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/25">Crear</button>
                 </div>
               </form>
             )}
@@ -856,6 +1439,11 @@ export default function AdminDashboardPage() {
                     <option value="limpieza">Personal de Limpieza</option>
                     <option value="admin">Administrador</option>
                   </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Nueva Contraseña (opcional)</label>
+                  <input type="password" value={userPassword} onChange={(e) => setUserPassword(e.target.value)} placeholder="Dejar vacío para no cambiar" autoComplete="new-password" minLength={6} className="w-full bg-slate-50 dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500" />
+                  <p className="text-[10px] text-slate-400 mt-1">Mínimo 6 caracteres. Si se deja vacío, la contraseña no cambia.</p>
                 </div>
                 <div className="flex justify-end gap-2 pt-3">
                   <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-semibold">Cancelar</button>
