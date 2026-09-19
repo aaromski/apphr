@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation'; // <-- 1. Importar useRouter
 import { 
@@ -15,7 +15,11 @@ import {
   LogOut, // <-- 2. Importar el icono de salida
   TriangleAlert, // <-- Icono de alerta de tiempo límite
   Star, // <-- Icono de prioridad
-  DoorOpen // <-- Icono del botón de Check-Out
+  DoorOpen, // <-- Icono del botón de Check-Out
+  BellRing, // <-- Icono de notificaciones del menú desplegable
+  CheckCheck, // <-- Icono "marcar todo como leído"
+  Trash2, // <-- Icono "limpiar historial"
+  Radio // <-- Indicador de evento Realtime en el historial
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
@@ -31,13 +35,97 @@ interface Room {
   is_priority?: boolean;
 }
 
+// Entrada del historial de notificaciones acumulado en el panel de recepción
+interface NotificationItem {
+  id: string;
+  message: string;
+  kind: 'status' | 'priority' | 'info';
+  unread: boolean;
+  timestamp: number;
+}
+
 export default function DashboardPage() {
   const router = useRouter(); // <-- 3. Inicializar router
   const [rooms, setRooms] = useState<Room[]>([]);
+  // Última versión sincronizada de las habitaciones (fuente de comparación para los toasts).
+  // Los updates optimistas NO la tocan, solo la actualizan las respuestas Realtime / carga inicial.
+  const roomsRef = useRef<Room[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState<string>('Todos');
   const [searchTerm, setSearchTerm] = useState('');
   const [notification, setNotification] = useState<{ message: string; visible: boolean } | null>(null);
+  // Historial acumulado de notificaciones recibidas vía Realtime
+  const [notificationsList, setNotificationsList] = useState<NotificationItem[]>([]);
+  // Visibilidad del menú desplegable de la campana
+  const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
+  const bellMenuRef = useRef<HTMLDivElement>(null);
+
+  // Mensaje informativo SOLO cuando el estado operativo real de la habitación cambió.
+  // Los casos especiales (fin de limpieza, ocupación, disponibilidad) reemplazan al genérico.
+  const buildStatusChangedMessage = (prevRoom: Room, nextRoom: Room): string => {
+    if (prevRoom.status === 'En Limpieza' && nextRoom.status === 'Limpia/Lista') {
+      return `Habitación ${nextRoom.room_number} está lista`;
+    }
+    if (prevRoom.status === 'Limpia/Lista' && nextRoom.status === 'Ocupada') {
+      return `Habitación ${nextRoom.room_number} ahora Ocupada (ingreso programado)`;
+    }
+    if (prevRoom.status === 'Limpia/Lista' && nextRoom.status === 'Disponible') {
+      return `Habitación ${nextRoom.room_number} queda Disponible y lista`;
+    }
+    return `Habitación ${nextRoom.room_number} cambió a: ${nextRoom.status}`;
+  };
+
+  // Realtime puede entregar el registro anterior (payload.old) como objeto, como string
+  // base64/JSON, o no entregarlo (RLS). Esta función lo normaliza y valida antes de usarlo.
+  const parseRealtimeOldRoom = (raw: unknown): Room | null => {
+    if (!raw) return null;
+
+    let candidate: unknown = raw;
+    if (typeof raw === 'string') {
+      try {
+        candidate = JSON.parse(atob(raw));
+      } catch {
+        try {
+          candidate = JSON.parse(raw);
+        } catch {
+          return null;
+        }
+      }
+    }
+
+    if (candidate && typeof candidate === 'object') {
+      const room = candidate as Room;
+      if (typeof room.id === 'string' && typeof room.status === 'string') return room;
+    }
+    return null;
+  };
+
+  // Publica una notificación: actualiza el toast flotante y acumula el historial.
+  const publishNotification = useCallback((message: string, kind: NotificationItem['kind'] = 'info') => {
+    setNotification({ message, visible: true });
+    setNotificationsList((prev) =>
+      [
+        {
+          id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+          message,
+          kind,
+          unread: true,
+          timestamp: Date.now(),
+        },
+        ...prev,
+      ].slice(0, 40)
+    );
+  }, []);
+
+  const markAllNotificationsRead = () => {
+    setNotificationsList((prev) => prev.map((n) => ({ ...n, unread: false })));
+  };
+
+  const clearNotifications = () => {
+    setNotificationsList([]);
+  };
+
+  const unreadCount = notificationsList.filter((n) => n.unread).length;
 
   // Estados para el perfil del usuario activo (Recepcionista)
   const [userData, setUserData] = useState<{ nombre: string; role: string; email: string; hotel_id?: string } | null>(null);
@@ -46,10 +134,33 @@ export default function DashboardPage() {
   const [typeConfigs, setTypeConfigs] = useState<Record<string, { tiempo_estandar_min: number; sla_min: number }>>({});
   const [now, setNow] = useState<number>(() => Date.now());
 
+  // Marca de tiempo relativa para el historial (se mantiene fresca por el reloj base `now`)
+  const formatRelativeTime = (ts: number) => {
+    const diff = now - ts;
+    if (diff < 60000) return 'ahora';
+    const min = Math.floor(diff / 60000);
+    if (min < 60) return `hace ${min} min`;
+    const h = Math.floor(min / 60);
+    if (h < 24) return `hace ${h}h`;
+    return new Date(ts).toLocaleDateString('es-VE', { day: 'numeric', month: 'short' });
+  };
+
   useEffect(() => {
     const tick = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(tick);
   }, []);
+
+  // Cierra el menú de notificaciones cuando se hace clic fuera de él
+  useEffect(() => {
+    if (!showNotificationsMenu) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (bellMenuRef.current && !bellMenuRef.current.contains(event.target as Node)) {
+        setShowNotificationsMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showNotificationsMenu]);
 
   useEffect(() => {
     async function fetchInitialData() {
@@ -94,6 +205,7 @@ export default function DashboardPage() {
         console.error('Error cargando habitaciones:', error.message);
       } else {
         setRooms(data || []);
+        roomsRef.current = data || [];
       }
       setLoading(false);
     }
@@ -107,39 +219,48 @@ export default function DashboardPage() {
         (payload) => {
           if (payload.eventType === 'UPDATE') {
             const updatedRoom = payload.new as Room;
-            const previousRoom = payload.old as Room;
+            // Realtime no siempre entrega un registro anterior usable (payload.old puede ser
+            // base64, estar incompleto o no llegar con RLS), así que se compara contra la
+            // última versión sincronizada en local como respaldo.
+            const previousRoom =
+              parseRealtimeOldRoom(payload.old) ??
+              roomsRef.current.find((r) => r.id === updatedRoom.id);
 
             setRooms((prev) =>
               prev.map((room) => (room.id === updatedRoom.id ? updatedRoom : room))
             );
+            roomsRef.current = roomsRef.current.map((room) =>
+              room.id === updatedRoom.id ? updatedRoom : room
+            );
 
-            // Mensaje según el tipo de cambio: estado o prioridad
-            if (previousRoom.status !== updatedRoom.status) {
-              let message = `Habitación ${updatedRoom.room_number} cambió a: ${updatedRoom.status}`;
-              // Al finalizar la limpieza: aviso explícito de habitación lista
-              if (previousRoom.status === 'En Limpieza' && updatedRoom.status === 'Limpia/Lista') {
-                message = `Habitación ${updatedRoom.room_number} está lista`;
-              } else if (previousRoom.status === 'Limpia/Lista' && updatedRoom.status === 'Ocupada') {
-                message = `Habitación ${updatedRoom.room_number} ahora Ocupada (ingreso programado)`;
-              } else if (previousRoom.status === 'Limpia/Lista' && updatedRoom.status === 'Disponible') {
-                message = `Habitación ${updatedRoom.room_number} queda Disponible y lista`;
-              }
-              setNotification({
-                message,
-                visible: true,
-              });
-            } else if (Boolean(previousRoom.is_priority) !== Boolean(updatedRoom.is_priority)) {
-              setNotification({
-                message: `Habitación ${updatedRoom.room_number} ${
-                  updatedRoom.is_priority ? 'se marcó como prioridad' : 'ya no es prioritaria'
+            // Solo notificar cuando se puede confirmar qué cambió.
+            // 1) Cambio de ESTADO operativo: mensaje genérico de transición.
+            if (previousRoom && previousRoom.status !== updatedRoom.status) {
+              publishNotification(buildStatusChangedMessage(previousRoom, updatedRoom), 'status');
+            }
+            // 2) Cambio de PRIORIDAD (estrella): mensaje específico, el estado no cambió.
+            else if (
+              previousRoom &&
+              Boolean(previousRoom.is_priority) !== Boolean(updatedRoom.is_priority)
+            ) {
+              publishNotification(
+                `Habitación ${updatedRoom.room_number} ${
+                  updatedRoom.is_priority
+                    ? 'marcada como prioritaria'
+                    : ': prioridad removida'
                 }`,
-                visible: true,
-              });
+                'priority'
+              );
             }
           } else if (payload.eventType === 'INSERT') {
             setRooms((prev) => [...prev, payload.new as Room]);
+            roomsRef.current = [...roomsRef.current, payload.new as Room];
           } else if (payload.eventType === 'DELETE') {
-            setRooms((prev) => prev.filter((room) => room.id !== payload.old.id));
+            const deletedRoom = parseRealtimeOldRoom(payload.old);
+            if (deletedRoom) {
+              setRooms((prev) => prev.filter((room) => room.id !== deletedRoom.id));
+              roomsRef.current = roomsRef.current.filter((room) => room.id !== deletedRoom.id);
+            }
           }
         }
       )
@@ -148,11 +269,26 @@ export default function DashboardPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [publishNotification]);
 
   const updateRoomStatus = async (room: Room, newStatus: string) => {
+    // Actualización optimista: reflejo inmediato sin depender de Realtime.
+    // (Realtime luego sincroniza y, si detecta el cambio, emite el toast de estado.)
+    // No se toca roomsRef: así Realtime puede comparar payload.old / roomsRef y disparar
+    // la notificación de cambio de estado para el originador también.
+    setRooms((prev) =>
+      prev.map((r) => (r.id === room.id ? { ...r, status: newStatus } : r))
+    );
+
     const { error } = await supabase.from('rooms').update({ status: newStatus }).eq('id', room.id);
-    if (error) console.error('Error actualizando estado:', error.message);
+    if (error) {
+      console.error('Error actualizando estado:', error.message);
+      // Revertir el cambio en caso de error
+      setRooms((prev) =>
+        prev.map((r) => (r.id === room.id ? { ...r, status: room.status } : r))
+      );
+      return;
+    }
 
     // RF-04 / HU-03: al registrarse un Check-Out, dispara el webhook hacia n8n
     // para que marque la habitación como "Sucia" y la encolé para limpieza.
@@ -184,36 +320,33 @@ export default function DashboardPage() {
     }
   };
 
-  // Botón dedicado de Check-Out: registra la salida formal y deja la habitación Sucia.
-  // Solo está habilitado cuando la habitación está Ocupada.
+  // Botón dedicado de Check-Out: registra la salida formal pasándola a 'Check-Out' antes de 'Sucia'.
   const handleCheckout = async (room: Room) => {
     if (room.status !== 'Ocupada') return;
 
-    // Actualización optimista
-    setRooms((prev) =>
-      prev.map((r) => (r.id === room.id ? { ...r, status: 'Sucia', cleaning_started_at: null } : r))
-    );
+    // 1. Cambiar primero al estado 'Check-Out' formal requerido por la cadena canónica
+    const { error: errorCheckout } = await supabase
+      .from('rooms')
+      .update({ status: 'Check-Out' })
+      .eq('id', room.id);
 
-    // 1. Cambio autoritativo del estado a Sucia (evita limpiezas intermedias de estadía)
-    const { error } = await supabase
+    if (errorCheckout) {
+      console.error('Error al registrar check-out:', errorCheckout.message);
+      return;
+    }
+
+    // 2. Notificar a n8n
+    await sendCheckoutWebhook(room);
+
+    // 3. Inmediatamente después, el flujo continúa hacia 'Sucia' para la limpieza
+    const { error: errorSucia } = await supabase
       .from('rooms')
       .update({ status: 'Sucia', cleaning_started_at: null })
       .eq('id', room.id);
 
-    if (error) {
-      console.error('Error al registrar check-out:', error.message);
-      setRooms((prev) =>
-        prev.map((r) =>
-          r.id === room.id
-            ? { ...r, status: room.status, cleaning_started_at: room.cleaning_started_at }
-            : r
-        )
-      );
-      return;
+    if (errorSucia) {
+      console.error('Error al pasar la habitación a sucia:', errorSucia.message);
     }
-
-    // 2. Registro formal de la salida + aviso de limpieza en cola (webhook n8n)
-    await sendCheckoutWebhook(room);
   };
 
   // Transiciones permitidas por la recepción según el estado actual de la habitación.
@@ -247,6 +380,7 @@ export default function DashboardPage() {
       setRooms((prev) =>
         prev.map((r) => (r.id === room.id ? { ...r, is_priority: room.is_priority } : r))
       );
+      return;
     }
   };
 
@@ -329,10 +463,119 @@ export default function DashboardPage() {
 
           <ThemeToggle />
 
-          <button className="p-2 text-slate-400 hover:text-slate-700 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors relative">
-            <Bell className="w-4 h-4" />
-            <span className="w-2 h-2 bg-indigo-500 rounded-full absolute top-1.5 right-1.5" />
-          </button>
+          <div className="relative" ref={bellMenuRef}>
+            <button
+              onClick={() => setShowNotificationsMenu((prev) => !prev)}
+              aria-haspopup="true"
+              aria-expanded={showNotificationsMenu}
+              aria-label="Notificaciones"
+              className={`p-2 rounded-lg transition-colors relative ${
+                showNotificationsMenu
+                  ? 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-white'
+                  : 'text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
+              }`}
+            >
+              <Bell className="w-4 h-4" />
+              {/* Punto indicador: visible solo si hay notificaciones sin leer */}
+              {unreadCount > 0 && (
+                <span className="w-2 h-2 bg-indigo-500 rounded-full absolute top-1.5 right-1.5 animate-pulse" />
+              )}
+            </button>
+
+            {showNotificationsMenu && (
+              <div className="absolute right-0 top-full mt-2 w-80 sm:w-[22rem] bg-white/95 dark:bg-[#111625]/95 backdrop-blur-xl border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl shadow-slate-900/10 dark:shadow-black/40 z-50 overflow-hidden">
+                {/* Encabezado */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-slate-800/80">
+                  <div className="flex items-center gap-2">
+                    <BellRing className="w-4 h-4 text-indigo-500" />
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">Notificaciones</h3>
+                    {unreadCount > 0 && (
+                      <span className="text-[10px] font-bold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 px-1.5 py-0.5 rounded-full">
+                        {unreadCount}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-0.5">
+                    <button
+                      onClick={markAllNotificationsRead}
+                      disabled={unreadCount === 0}
+                      title="Marcar todo como leído"
+                      className="p-1.5 text-slate-400 hover:text-indigo-500 hover:bg-indigo-500/10 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <CheckCheck className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={clearNotifications}
+                      disabled={notificationsList.length === 0}
+                      title="Limpiar historial"
+                      className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Lista scrolleable de eventos Realtime */}
+                <div className="max-h-96 overflow-y-auto overscroll-contain">
+                  {notificationsList.length === 0 ? (
+                    <div className="py-10 flex flex-col items-center justify-center gap-2 text-center px-6">
+                      <BellRing className="w-6 h-6 text-slate-300 dark:text-slate-600" />
+                      <p className="text-xs text-slate-400 dark:text-slate-500">
+                        No hay notificaciones recientes
+                      </p>
+                    </div>
+                  ) : (
+                    <ul className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                      {notificationsList.map((item) => (
+                        <li
+                          key={item.id}
+                          className={`px-4 py-3 flex items-start gap-3 transition-colors ${
+                            item.unread
+                              ? 'bg-indigo-500/[0.04] dark:bg-indigo-500/[0.06]'
+                              : ''
+                          } hover:bg-slate-50 dark:hover:bg-slate-800/40`}
+                        >
+                          <div
+                            className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
+                              item.kind === 'priority'
+                                ? 'bg-amber-500/10 text-amber-500'
+                                : 'bg-indigo-500/10 text-indigo-500'
+                            }`}
+                          >
+                            {item.kind === 'priority' ? (
+                              <Star className="w-4 h-4" />
+                            ) : (
+                              <Building2 className="w-4 h-4" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p
+                              className={`text-xs leading-snug ${
+                                item.unread
+                                  ? 'font-semibold text-slate-900 dark:text-white'
+                                  : 'text-slate-600 dark:text-slate-300'
+                              }`}
+                            >
+                              {item.message}
+                            </p>
+                            <div className="flex items-center gap-1.5 mt-1">
+                              <Radio className="w-3 h-3 text-emerald-500" />
+                              <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                                {formatRelativeTime(item.timestamp)} · Realtime
+                              </span>
+                            </div>
+                          </div>
+                          {item.unread && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0 mt-2" />
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Bloque dinámico de la recepcionista con el botón de salida integrado */}
           <div className="flex items-center gap-3 pl-2 border-l border-slate-200 dark:border-slate-800">
