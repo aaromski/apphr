@@ -466,7 +466,7 @@ export default function LimpiezaMobilePage() {
       await supabase
         .from('ciclos_limpieza')
         .update({
-          usuario_id: currentUserId,
+          usuario_id: currentUserId, // Aseguramos enviar el ID actual
           iniciado_at: serverStartIso,
         })
         .eq('id', existingCiclo.id);
@@ -476,7 +476,7 @@ export default function LimpiezaMobilePage() {
         .insert({
           habitacion_id: room.id,
           hotel_id: room.hotel_id,
-          usuario_id: currentUserId,
+          usuario_id: currentUserId, // Aseguramos enviar el ID actual
           estado_origen: room.status,
           sucia_at: serverStartIso,
           iniciado_at: serverStartIso,
