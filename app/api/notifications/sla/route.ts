@@ -8,7 +8,8 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { hotel_id, habitacion, mensaje, rol } = body;
+    // 1. Extraemos también el user_id del body (opcional)
+    const { hotel_id, habitacion, mensaje, rol, user_id } = body;
 
     // Si viene un rol específico (ej. "limpieza"), ajustamos el mensaje por defecto o usamos el que venga
     const targetRole = rol || 'recepcion';
@@ -22,7 +23,7 @@ export async function POST(request: Request) {
       }
     }
 
-    // Insertar la notificación en la base de datos de Supabase con su respectivo rol
+    // Insertar la notificación en la base de datos de Supabase incluyendo el user_id
     const { error } = await supabase.from('notifications').insert([
       {
         hotel_id: hotel_id || null,
@@ -30,6 +31,7 @@ export async function POST(request: Request) {
         kind: 'priority',
         unread: true,
         target_role: targetRole, // Guardamos a quién va dirigida
+        user_id: user_id || null, // 2. Guardamos el ID del usuario específico (si viene)
       },
     ]);
 

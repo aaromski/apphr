@@ -345,25 +345,31 @@ export default function LimpiezaMobilePage() {
         }
       )
       .on(
-  'postgres_changes',
-  { event: 'INSERT', schema: 'public', table: 'notifications' },
-  (payload) => {
-    const newNotif = payload.new as { 
-      message: string; 
-      target_role?: string; 
-      kind?: 'status' | 'priority' | 'info' 
-    };
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications' },
+        (payload) => {
+          const newNotif = payload.new as { 
+            message: string; 
+            target_role?: string; 
+            user_id?: string; // <-- Nuevo campo opcional
+            kind?: 'status' | 'priority' | 'info' 
+          };
 
-    if (newNotif && newNotif.message) {
-      // Validamos estrictamente que la notificación sea para limpieza
-      const target = newNotif.target_role ? newNotif.target_role.toLowerCase().trim() : '';
-      
-      if (target === 'limpieza') {
-        triggerNotification(newNotif.message);
-      }
-    }
-  }
-)
+          if (newNotif && newNotif.message) {
+            const target = newNotif.target_role ? newNotif.target_role.toLowerCase().trim() : '';
+            
+            if (target === 'limpieza') {
+              // Si la notificación tiene un usuario específico asignado, 
+              // validamos que coincida con el usuario actual logueado.
+              if (newNotif.user_id && newNotif.user_id !== currentUserId) {
+                return; // Si es para otro usuario, la ignoramos
+              }
+
+              triggerNotification(newNotif.message);
+            }
+          }
+        }
+      )
       .subscribe();
 
     return () => {
