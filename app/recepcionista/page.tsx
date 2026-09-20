@@ -394,10 +394,14 @@ export default function DashboardPage() {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'notifications' },
         (payload) => {
-          const target = newNotif.target_role || 'recepcion';
+          const newNotif = payload.new as { message: string; target_role?: string; kind?: 'status' | 'priority' | 'info' };
+
+          if (newNotif && newNotif.message) {
+            const target = newNotif.target_role || 'recepcion';
             if (target === 'recepcion') {
               publishNotification(newNotif.message, newNotif.kind || 'priority');
             }
+          }
         }
       )
       .subscribe();

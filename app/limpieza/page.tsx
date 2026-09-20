@@ -348,10 +348,14 @@ export default function LimpiezaMobilePage() {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'notifications' },
         (payload) => {
-          const target = newNotif.target_role || 'limpieza';
+          const newNotif = payload.new as { message: string; target_role?: string };
+          
+          if (newNotif && newNotif.message) {
+            const target = newNotif.target_role || 'limpieza';
             if (target === 'limpieza') {
               triggerNotification(newNotif.message);
             }
+          }
         }
       )
       .subscribe();
