@@ -391,19 +391,25 @@ export default function DashboardPage() {
       )
       // 👇 SECCIÓN AÑADIDA: Escucha de la tabla notifications en Realtime para n8n 👇
       .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'notifications' },
-        (payload) => {
-          const newNotif = payload.new as { message: string; target_role?: string; kind?: 'status' | 'priority' | 'info' };
+  'postgres_changes',
+  { event: 'INSERT', schema: 'public', table: 'notifications' },
+  (payload) => {
+    const newNotif = payload.new as { 
+      message: string; 
+      target_role?: string; 
+      kind?: 'status' | 'priority' | 'info' 
+    };
 
-          if (newNotif && newNotif.message) {
-            const target = newNotif.target_role || 'recepcion';
-            if (target === 'recepcion') {
-              publishNotification(newNotif.message, newNotif.kind || 'priority');
-            }
-          }
-        }
-      )
+    if (newNotif && newNotif.message) {
+      // Validamos estrictamente que la notificación sea para recepción
+      const target = newNotif.target_role ? newNotif.target_role.toLowerCase().trim() : '';
+      
+      if (target === 'recepcion') {
+        publishNotification(newNotif.message, newNotif.kind || 'priority');
+      }
+    }
+  }
+)
       .subscribe();
 
     return () => {

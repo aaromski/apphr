@@ -345,19 +345,25 @@ export default function LimpiezaMobilePage() {
         }
       )
       .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'notifications' },
-        (payload) => {
-          const newNotif = payload.new as { message: string; target_role?: string };
-          
-          if (newNotif && newNotif.message) {
-            const target = newNotif.target_role || 'limpieza';
-            if (target === 'limpieza') {
-              triggerNotification(newNotif.message);
-            }
-          }
-        }
-      )
+  'postgres_changes',
+  { event: 'INSERT', schema: 'public', table: 'notifications' },
+  (payload) => {
+    const newNotif = payload.new as { 
+      message: string; 
+      target_role?: string; 
+      kind?: 'status' | 'priority' | 'info' 
+    };
+
+    if (newNotif && newNotif.message) {
+      // Validamos estrictamente que la notificación sea para limpieza
+      const target = newNotif.target_role ? newNotif.target_role.toLowerCase().trim() : '';
+      
+      if (target === 'limpieza') {
+        publishNotification(newNotif.message, newNotif.kind || 'priority');
+      }
+    }
+  }
+)
       .subscribe();
 
     return () => {
