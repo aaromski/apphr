@@ -5,24 +5,29 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     
-    // Extraemos los datos que envía n8n
+    // Extraemos los datos enviados por n8n
     const { hotel_id, room_number, sla_min } = body;
 
-    if (!room_number) {
-      return NextResponse.json({ error: 'Faltan datos de la habitación' }, { status: 400 });
-    }
-
-    // Aquí puedes manejar la lógica que prefieras:
-    // - Guardar en tu sistema de logs/notificaciones si lo requieres.
-    // - O simplemente confirmar la recepción para que n8n dé el flujo por exitoso.
-    console.log(`⚠️ Alerta de SLA superado recibida desde n8n para la habitación ${room_number}`);
+    console.log(`⚠️ Alerta de SLA recibida desde n8n para la habitación: ${room_number || 'Desconocida'}`);
 
     return NextResponse.json({ 
       success: true, 
-      message: `Notificación procesada para la habitación ${room_number}` 
-    });
+      message: `Alerta de SLA procesada correctamente para la habitación ${room_number || 'N/A'}` 
+    }, { status: 200 });
+
   } catch (err: any) {
     console.error('Error procesando la notificación de SLA:', err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ 
+      success: false, 
+      error: err.message 
+    }, { status: 500 });
   }
+}
+
+// Opcional: Para permitir que si abres la URL por error en el navegador no dé 404 feo
+export async function GET() {
+  return NextResponse.json({ 
+    status: "Active", 
+    endpoint: "AppHR SLA Notifications API" 
+  }, { status: 200 });
 }
