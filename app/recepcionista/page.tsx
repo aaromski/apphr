@@ -1,7 +1,9 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { supabase } from '@/lib/supabase';
-import { useRouter } from 'next/navigation'; // <-- 1. Importar useRouter
+import { playNotificationSound } from '@/lib/notify-sound';
+import { useRouter } from 'next/navigation';
 import { 
   ShieldCheck, 
   Building2, 
@@ -12,26 +14,57 @@ import {
   LayoutGrid,
   CheckCircle2,
   X,
-  LogOut, // <-- 2. Importar el icono de salida
-  TriangleAlert, // <-- Icono de alerta de tiempo límite
-  Star, // <-- Icono de prioridad
-  DoorOpen, // <-- Icono del botón de Check-Out
-  BellRing, // <-- Icono de notificaciones del menú desplegable
-  CheckCheck, // <-- Icono "marcar todo como leído"
-  Trash2, // <-- Icono "limpiar historial"
-  Radio // <-- Indicador de evento Realtime en el historial
+  LogOut,
+  TriangleAlert,
+  Star,
+  DoorOpen,
+  BellRing,
+  CheckCheck,
+  Trash2,
+  Radio,
+  Menu
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
+
+// ─── Server Time Sync ───────────────────────────────────────────
+// Offset medido una vez al cargar: serverTime - localTime
+async function getServerTimeOffset(): Promise<number> {
+  try {
+    const { data, error } = await supabase.rpc('get_server_time');
+    if (!error && data) {
+      const serverMs = Date.parse(data);
+      if (Number.isFinite(serverMs)) {
+        return serverMs - Date.now(); // offset = server - local
+      }
+    }
+  } catch {}
+  // Fallback: query ligera a una tabla pequeña para medir latencia y obtener now()
+  const start = Date.now();
+  const { data, error } = await supabase.from('ciclos_limpieza').select('id').limit(1);
+  const end = Date.now();
+  if (!error && data) {
+    const latency = end - start;
+    return latency / 2;
+  }
+  return 0;
+}
+
+interface RoomTypeConfig {
+  id: string;
+  room_type: string;
+  tiempo_estandar_min: number;
+  sla_min: number;
+}
 
 interface Room {
   id: string;
   room_number: string;
-  status: 'Disponible' | 'Ocupada' | 'Sucia' | 'En Limpieza' | 'Limpia/Lista' | 'Check-Out' | 'Mantenimiento' | string;
-  room_type?: string;
-  zone?: string;
+  status: 'Disponible' | 'Ocupada' | 'Sucia' | 'En Limpieza' | 'Limpia/Lista' | 'Mantenimiento' | string;
+  tipo_habitacion_id?: string | null;
+  room_type_config?: RoomTypeConfig | null;
+  zona_id?: string | null;
+  zonas?: { nombre: string } | null;
   hotel_id?: string;
-  cleaning_timer?: string;
-  cleaning_started_at?: string | null;
   is_priority?: boolean;
 }
 
@@ -45,20 +78,23 @@ interface NotificationItem {
 }
 
 export default function DashboardPage() {
-  const router = useRouter(); // <-- 3. Inicializar router
+  const router = useRouter();
   const [rooms, setRooms] = useState<Room[]>([]);
-  // Última versión sincronizada de las habitaciones (fuente de comparación para los toasts).
-  // Los updates optimistas NO la tocan, solo la actualizan las respuestas Realtime / carga inicial.
   const roomsRef = useRef<Room[]>([]);
+  // cleaningStarts[habitacion_id] = iniciado_at from ciclos_limpieza (ISO string)
+  const [cleaningStarts, setCleaningStarts] = useState<Record<string, number>>({});
+  const lastUserChangeRef = useRef<{ roomId: string; newStatus: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState<string>('Todos');
   const [searchTerm, setSearchTerm] = useState('');
   const [notification, setNotification] = useState<{ message: string; visible: boolean } | null>(null);
-  // Historial acumulado de notificaciones recibidas vía Realtime
   const [notificationsList, setNotificationsList] = useState<NotificationItem[]>([]);
-  // Visibilidad del menú desplegable de la campana
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
   const bellMenuRef = useRef<HTMLDivElement>(null);
+
+  // Mobile responsive states
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   // Mensaje informativo SOLO cuando el estado operativo real de la habitación cambió.
   // Los casos especiales (fin de limpieza, ocupación, disponibilidad) reemplazan al genérico.
@@ -102,6 +138,9 @@ export default function DashboardPage() {
 
   // Publica una notificación: actualiza el toast flotante y acumula el historial.
   const publishNotification = useCallback((message: string, kind: NotificationItem['kind'] = 'info') => {
+    // Representación sonora de que llegó una notificación
+    playNotificationSound();
+
     setNotification({ message, visible: true });
     setNotificationsList((prev) =>
       [
@@ -132,11 +171,41 @@ export default function DashboardPage() {
 
   // Configuración de tiempos límite por tipo de habitación + reloj base para los temporizadores
   const [typeConfigs, setTypeConfigs] = useState<Record<string, { tiempo_estandar_min: number; sla_min: number }>>({});
-  const [now, setNow] = useState<number>(() => Date.now());
 
-  // Marca de tiempo relativa para el historial (se mantiene fresca por el reloj base `now`)
+  // ─── Server Time Sync ───────────────────────────────────────────
+  // Offset medido una vez al cargar: serverTime - localTime
+  const [serverOffset, setServerOffset] = useState<number>(0);
+  const [offsetReady, setOffsetReady] = useState(false);
+
+  // Tiempo "servidor" actual = localNow + offset. Se actualiza cada segundo.
+  const [serverNow, setServerNow] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    let cancelled = false;
+    getServerTimeOffset().then((offset) => {
+      if (!cancelled) {
+        setServerOffset(offset);
+        setOffsetReady(true);
+      }
+    }).catch(() => {
+      if (!cancelled) setOffsetReady(true);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Reloj base "servidor" (tick cada segundo)
+  useEffect(() => {
+    if (!offsetReady) return;
+    const tick = setInterval(() => setServerNow(Date.now() + serverOffset), 1000);
+    return () => clearInterval(tick);
+  }, [serverOffset, offsetReady]);
+
+  // Para compatibilidad con código existente que usa `now`
+  const now = serverNow;
+
+  // Marca de tiempo relativa para el historial (se mantiene fresca por el reloj base `serverNow`)
   const formatRelativeTime = (ts: number) => {
-    const diff = now - ts;
+    const diff = serverNow - ts;
     if (diff < 60000) return 'ahora';
     const min = Math.floor(diff / 60000);
     if (min < 60) return `hace ${min} min`;
@@ -145,10 +214,12 @@ export default function DashboardPage() {
     return new Date(ts).toLocaleDateString('es-VE', { day: 'numeric', month: 'short' });
   };
 
-  useEffect(() => {
-    const tick = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(tick);
-  }, []);
+  const formatDuration = (ms: number): string => {
+    const total = Math.floor(ms / 1000);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
 
   // Cierra el menú de notificaciones cuando se hace clic fuera de él
   useEffect(() => {
@@ -200,12 +271,38 @@ export default function DashboardPage() {
       }
 
       // 2. Obtener habitaciones
-      const { data, error } = await supabase.from('rooms').select('*').order('room_number', { ascending: true });
+      const { data, error } = await supabase
+        .from('rooms')
+        .select(`
+          *,
+          room_type_config:tipo_habitacion_id ( id, room_type, tiempo_estandar_min, sla_min ),
+          zonas:zona_id ( nombre )
+        `)
+        .order('room_number', { ascending: true });
       if (error) {
         console.error('Error cargando habitaciones:', error.message);
       } else {
         setRooms(data || []);
         roomsRef.current = data || [];
+        // Obtener inicios de limpieza desde ciclos_limpieza
+        const inProgressIds = (data || []).filter((r) => r.status === 'En Limpieza').map((r) => r.id);
+        if (inProgressIds.length > 0) {
+          const { data: startsData } = await supabase
+            .from('ciclos_limpieza')
+            .select('habitacion_id, iniciado_at')
+            .in('habitacion_id', inProgressIds)
+            .is('finalizado_at', null);
+          const starts: Record<string, number> = {};
+          for (const row of startsData ?? []) {
+            if (row.habitacion_id && row.iniciado_at) {
+              const ms = Date.parse(row.iniciado_at);
+              if (Number.isFinite(ms)) {
+                starts[row.habitacion_id] = ms;
+              }
+            }
+          }
+          setCleaningStarts(starts);
+        }
       }
       setLoading(false);
     }
@@ -236,7 +333,42 @@ export default function DashboardPage() {
             // Solo notificar cuando se puede confirmar qué cambió.
             // 1) Cambio de ESTADO operativo: mensaje genérico de transición.
             if (previousRoom && previousRoom.status !== updatedRoom.status) {
-              publishNotification(buildStatusChangedMessage(previousRoom, updatedRoom), 'status');
+              // Ignorar notificación si el cambio fue iniciado por el usuario actual
+              const lastChange = lastUserChangeRef.current;
+              if (!(lastChange && lastChange.roomId === updatedRoom.id && lastChange.newStatus === updatedRoom.status)) {
+                publishNotification(buildStatusChangedMessage(previousRoom, updatedRoom), 'status');
+              }
+              // Limpiar el registro después de procesar (o en el siguiente tick)
+              if (lastChange && lastChange.roomId === updatedRoom.id) {
+                lastUserChangeRef.current = null;
+              }
+            }
+            // Si la habitación pasa a "En Limpieza", obtener el iniciado_at desde ciclos_limpieza
+            if (updatedRoom.status === 'En Limpieza' && previousRoom?.status !== 'En Limpieza') {
+              supabase
+                .from('ciclos_limpieza')
+                .select('iniciado_at')
+                .eq('habitacion_id', updatedRoom.id)
+                .is('finalizado_at', null)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle()
+                .then(({ data }) => {
+                  const ms = data?.iniciado_at ? Date.parse(data.iniciado_at) : null;
+                  if (ms && Number.isFinite(ms)) {
+                    setCleaningStarts((prev) => ({ ...prev, [updatedRoom.id]: ms }));
+                  }
+                });
+            }
+
+            // Al SALIR de "En Limpieza" (cambio a Limpia/Lista, Disponible, Ocupada, etc.):
+            // limpiar el timer para detener el cronómetro inmediato en la UI
+            if (previousRoom?.status === 'En Limpieza' && updatedRoom.status !== 'En Limpieza') {
+              setCleaningStarts((prev) => {
+                const next = { ...prev };
+                delete next[updatedRoom.id];
+                return next;
+              });
             }
             // 2) Cambio de PRIORIDAD (estrella): mensaje específico, el estado no cambió.
             else if (
@@ -251,6 +383,12 @@ export default function DashboardPage() {
                 }`,
                 'priority'
               );
+            }
+
+            // RF-04 / HU-03: al registrarse un Check-Out (Ocupada -> Sucia), dispara el webhook hacia n8n
+            // para notificar a automatizaciones externas.
+            if (previousRoom && previousRoom.status === 'Ocupada' && updatedRoom.status === 'Sucia') {
+              sendCheckoutWebhook(updatedRoom); // fire-and-forget, no bloquear realtime
             }
           } else if (payload.eventType === 'INSERT') {
             setRooms((prev) => [...prev, payload.new as Room]);
@@ -276,6 +414,8 @@ export default function DashboardPage() {
     // (Realtime luego sincroniza y, si detecta el cambio, emite el toast de estado.)
     // No se toca roomsRef: así Realtime puede comparar payload.old / roomsRef y disparar
     // la notificación de cambio de estado para el originador también.
+    // Guardamos el cambio local para que el handler de realtime lo ignore y no auto-notifique.
+    lastUserChangeRef.current = { roomId: room.id, newStatus };
     setRooms((prev) =>
       prev.map((r) => (r.id === room.id ? { ...r, status: newStatus } : r))
     );
@@ -287,15 +427,11 @@ export default function DashboardPage() {
       setRooms((prev) =>
         prev.map((r) => (r.id === room.id ? { ...r, status: room.status } : r))
       );
+      lastUserChangeRef.current = null;
       return;
     }
 
-    // RF-04 / HU-03: al registrarse un Check-Out, dispara el webhook hacia n8n
-    // para que marque la habitación como "Sucia" y la encolé para limpieza.
-    if (newStatus === 'Check-Out') {
-      await sendCheckoutWebhook(room);
-    }
-  };
+    };
 
   // Envía el evento de Check-Out al webhook de n8n
   const sendCheckoutWebhook = async (room: Room) => {
@@ -310,7 +446,7 @@ export default function DashboardPage() {
           evento: 'check_out',
           hotel_id: room.hotel_id,
           habitacion: room.room_number,
-          zona: room.zone || '',
+          zona: room.zonas?.nombre || '',
           timestamp: new Date().toISOString(),
         }),
         keepalive: true,
@@ -320,33 +456,29 @@ export default function DashboardPage() {
     }
   };
 
-  // Botón dedicado de Check-Out: registra la salida formal pasándola a 'Check-Out' antes de 'Sucia'.
+  // Botón dedicado de Check-Out: registra la salida y pasa la habitación DIRECTAMENTE a 'Sucia'.
+  // Marca check_out_at para que el trigger distinga check-out real vs cambio manual a Sucia.
   const handleCheckout = async (room: Room) => {
     if (room.status !== 'Ocupada') return;
 
-    // 1. Cambiar primero al estado 'Check-Out' formal requerido por la cadena canónica
-    const { error: errorCheckout } = await supabase
+    const nowIso = new Date().toISOString();
+
+    // Actualizamos ambas columnas en una sola consulta
+    const { error } = await supabase
       .from('rooms')
-      .update({ status: 'Check-Out' })
+      .update({ 
+        check_out_at: nowIso,
+        status: 'Sucia' 
+      })
       .eq('id', room.id);
 
-    if (errorCheckout) {
-      console.error('Error al registrar check-out:', errorCheckout.message);
+    if (error) {
+      console.error('Error al registrar check-out:', error.message);
       return;
     }
 
-    // 2. Notificar a n8n
+    // Notificar a n8n
     await sendCheckoutWebhook(room);
-
-    // 3. Inmediatamente después, el flujo continúa hacia 'Sucia' para la limpieza
-    const { error: errorSucia } = await supabase
-      .from('rooms')
-      .update({ status: 'Sucia', cleaning_started_at: null })
-      .eq('id', room.id);
-
-    if (errorSucia) {
-      console.error('Error al pasar la habitación a sucia:', errorSucia.message);
-    }
   };
 
   // Transiciones permitidas por la recepción según el estado actual de la habitación.
@@ -424,11 +556,29 @@ export default function DashboardPage() {
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
-  return (
+return (
     <div className="min-h-screen bg-slate-100 dark:bg-[#0b0f19] text-slate-900 dark:text-slate-200 font-sans flex flex-col transition-colors duration-300">
       
-      <header className="h-16 border-b border-slate-200 dark:border-slate-800/80 bg-white/80 dark:bg-[#111625]/80 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-30 transition-colors duration-300">
-        <div className="flex items-center gap-6">
+      {/* Mobile menu backdrop */}
+      {mobileMenuOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-30 lg:hidden"
+          onClick={() => setMobileMenuOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      <header className="h-16 border-b border-slate-200 dark:border-slate-800/80 bg-white/80 dark:bg-[#111625]/80 backdrop-blur-md px-4 lg:px-6 flex items-center justify-between sticky top-0 z-30 transition-colors duration-300">
+        <div className="flex items-center gap-4">
+          {/* Mobile menu button */}
+          <button 
+            className="lg:hidden p-2 rounded-lg bg-white dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 text-slate-500 hover:text-indigo-500 transition-colors shadow-sm"
+            onClick={() => setMobileMenuOpen(true)}
+            aria-label="Abrir menú"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+          
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shadow-md shadow-indigo-500/20">
               <ShieldCheck className="w-5 h-5 text-white" />
@@ -436,21 +586,19 @@ export default function DashboardPage() {
             <span className="font-bold text-lg text-slate-900 dark:text-white tracking-wide">AppHR</span>
           </div>
 
-          <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-800" />
-
-          <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300">
+          <div className="hidden lg:flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300">
             <Building2 className="w-4 h-4 text-slate-400" />
             <span>Grand Hotel Guayana</span>
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <div className="hidden md:flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-full text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-pulse" />
             Sincronización en Realtime Activa
           </div>
 
-          <div className="relative">
+          <div className="relative hidden sm:block">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
@@ -476,7 +624,6 @@ export default function DashboardPage() {
               }`}
             >
               <Bell className="w-4 h-4" />
-              {/* Punto indicador: visible solo si hay notificaciones sin leer */}
               {unreadCount > 0 && (
                 <span className="w-2 h-2 bg-indigo-500 rounded-full absolute top-1.5 right-1.5 animate-pulse" />
               )}
@@ -602,8 +749,21 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <main className="flex-1 px-6 py-6 max-w-[1600px] w-full mx-auto">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+      <main className="flex-1 px-4 lg:px-6 py-4 lg:py-6 max-w-[1600px] w-full mx-auto">
+        {/* Mobile filters toggle */}
+        <button 
+          className="lg:hidden w-full mb-4 bg-white dark:bg-[#111625] border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold px-3 py-2 rounded-xl flex items-center justify-between hover:border-slate-300 dark:hover:border-slate-700 shadow-sm transition-colors"
+          onClick={() => setMobileFiltersOpen(!mobileFiltersOpen)}
+          aria-expanded={mobileFiltersOpen}
+        >
+          <span className="flex items-center gap-2">
+            <LayoutGrid className="w-4 h-4" />
+            Filtros y Contadores
+          </span>
+          <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${mobileFiltersOpen ? 'rotate-180' : ''}`} />
+        </button>
+
+        <div className={`flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 ${mobileFiltersOpen ? 'flex' : 'hidden'} lg:flex`}>
           <div className="flex items-center gap-3 flex-wrap">
             <button className="bg-white dark:bg-[#111625] border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold px-3 py-1.5 rounded-xl flex items-center gap-2 hover:border-slate-300 dark:hover:border-slate-700 shadow-sm transition-colors">
               <LayoutGrid className="w-3.5 h-3.5" />
@@ -614,12 +774,12 @@ export default function DashboardPage() {
             <div className="h-4 w-[1px] bg-slate-200 dark:bg-slate-800 hidden sm:block" />
 
             {/* Filtros rápidos con 'Sucia' incluida */}
-            <div className="flex items-center gap-1.5 bg-white dark:bg-[#111625] p-1 rounded-xl border border-slate-200 dark:border-slate-800 text-xs shadow-sm">
-              {['Todos', 'Disponible', 'Ocupada', 'Check-Out', 'Sucia', 'En Limpieza', 'Limpia/Lista', 'Mantenimiento'].map((status) => (
+            <div className="flex items-center gap-1.5 bg-white dark:bg-[#111625] p-1 rounded-xl border border-slate-200 dark:border-slate-800 text-xs shadow-sm overflow-x-auto pb-1 no-scrollbar">
+              {['Todos', 'Disponible', 'Ocupada', 'Sucia', 'En Limpieza', 'Mantenimiento'].map((status) => (
                 <button
                   key={status}
-                  onClick={() => setActiveFilter(status)}
-                  className={`px-3 py-1 rounded-lg font-medium transition-all ${
+                  onClick={() => { setActiveFilter(status); setMobileFiltersOpen(false); }}
+                  className={`px-3 py-1 rounded-lg font-medium transition-all whitespace-nowrap ${
                     activeFilter === status
                       ? 'bg-indigo-600 text-white shadow-sm'
                       : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
@@ -665,12 +825,11 @@ export default function DashboardPage() {
         {loading ? (
           <div className="text-center py-20 text-slate-400 text-xs">Cargando habitaciones...</div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 lg:gap-4">
             {filteredRooms.map((room) => {
               const statusStyles: Record<string, string> = {
                 Disponible: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20',
                 Ocupada: 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20',
-                'Check-Out': 'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20',
                 Sucia: 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-400 border-slate-300 dark:border-slate-700',
                 Dirty: 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-400 border-slate-300 dark:border-slate-700',
                 'En Limpieza': 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20',
@@ -679,10 +838,11 @@ export default function DashboardPage() {
               };
 
               // Lógica de tiempos límite para limpiezas en curso (se evalúa en cada tick del reloj base)
-              const startedAt = room.cleaning_started_at;
-              const slaMin = typeConfigs[room.room_type || '']?.sla_min ?? 45;
-              const elapsed = room.status === 'En Limpieza' && startedAt
-                ? Math.max(0, now - new Date(startedAt).getTime())
+              const startedMs = cleaningStarts[room.id];
+              const roomTypeName = room.room_type_config?.room_type || 'Estándar';
+              const slaMin = typeConfigs[roomTypeName]?.sla_min ?? 45;
+              const elapsed = room.status === 'En Limpieza' && startedMs
+                ? Math.max(0, now - startedMs)
                 : 0;
               const isCritical = room.status === 'En Limpieza' && elapsed > slaMin * 60000;
 
@@ -763,7 +923,7 @@ export default function DashboardPage() {
 
                     <div className="flex items-center gap-2 mb-4">
                       <span className="text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-700/50">
-                        {room.room_type || 'Estándar'}
+                        {room.room_type_config?.room_type || 'Estándar'}
                       </span>
                       {room.is_priority && (
                         <span className="text-[10px] font-bold bg-amber-500/15 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded-md border border-amber-500/30 flex items-center gap-1">
@@ -780,7 +940,7 @@ export default function DashboardPage() {
                       {room.status}
                     </span>
 
-                    {room.status === 'En Limpieza' && startedAt ? (
+                    {room.status === 'En Limpieza' && startedMs ? (
                       <span
                         className={`text-[11px] font-bold flex items-center gap-1 ${
                           isCritical
@@ -795,10 +955,10 @@ export default function DashboardPage() {
                           <span className="uppercase text-[9px] tracking-wide">Tiempo excedido</span>
                         )}
                       </span>
-                    ) : room.cleaning_timer ? (
+                    ) : cleaningStarts[room.id] ? (
                       <span className="text-[11px] font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1">
                         <Clock className="w-3 h-3" />
-                        {room.cleaning_timer}
+                        {formatDuration(now - cleaningStarts[room.id])}
                       </span>
                     ) : null}
                   </div>

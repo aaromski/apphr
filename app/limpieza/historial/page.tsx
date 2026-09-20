@@ -2,47 +2,70 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
-import { CheckCircle2, Calendar } from 'lucide-react';
+import { CheckCircle2, Calendar, Clock, User, AlertTriangle, Target } from 'lucide-react';
 
-interface HistorialItem {
+interface CicloLimpieza {
   id: string;
-  estado_nuevo: string;
-  fecha_cambio: string;
-  rooms: {
+  habitacion_id: string;
+  usuario_id: string | null;
+  personal_nombre: string | null;
+  estado_origen: string;
+  sucia_at: string | null;
+  iniciado_at: string | null;
+  finalizado_at: string;
+  duracion_min: number | null;
+  sla_min: number | null;
+  cumplio_sla: boolean | null;
+  minutos_excedidos: number | null;
+  rooms?: {
     room_number: string;
-    room_type: string;
-    zone: string;
+    room_type_config?: { room_type: string } | null;
+    zonas?: { nombre: string } | null;
   } | null;
 }
 
 export default function HistorialPage() {
-  const [historial, setHistorial] = useState<HistorialItem[]>([]);
+  const [historial, setHistorial] = useState<CicloLimpieza[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchHistorial = async () => {
-      // Obtenemos solo los registros del usuario actual logueado (opcional pero recomendado)
       const { data: { user } } = await supabase.auth.getUser();
 
-      // Consultamos la tabla de historial real haciendo un join con rooms
-      const query = supabase
-        .from('historial_estados_habitacion')
+      // Consultamos la nueva tabla ciclos_limpieza con join a rooms, room_type_config y zonas
+      let query = supabase
+        .from('ciclos_limpieza')
         .select(`
           id,
-          estado_nuevo,
-          fecha_cambio,
+          habitacion_id,
+          usuario_id,
+          personal_nombre,
+          estado_origen,
+          sucia_at,
+          iniciado_at,
+          finalizado_at,
+          duracion_min,
+          sla_min,
+          cumplio_sla,
+          minutos_excedidos,
           rooms (
             room_number,
-            room_type,
-            zone
+            room_type_config ( room_type ),
+            zonas ( nombre )
           )
         `)
-        .eq('estado_nuevo', 'Limpia/Lista')
-        .order('fecha_cambio', { ascending: false });
+        .not('finalizado_at', 'is', null)
+        .order('finalizado_at', { ascending: false });
 
       if (user) {
-        // Opcional: si quieres ver solo lo que limpió este usuario específico
-        // query = query.eq('usuario_id', user.id);
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('hotel_id')
+          .eq('id', user.id)
+          .single();
+        if (profile?.hotel_id) {
+          query = query.eq('hotel_id', profile.hotel_id);
+        }
       }
 
       const { data, error } = await query;
@@ -52,7 +75,7 @@ export default function HistorialPage() {
       }
 
       if (data) {
-        setHistorial(data as unknown as HistorialItem[]);
+        setHistorial(data as unknown as CicloLimpieza[]);
       }
       setLoading(false);
     };
@@ -83,21 +106,55 @@ export default function HistorialPage() {
           </div>
         ) : (
           historial.map((item) => (
-            <div key={item.id} className="bg-white dark:bg-[#131927] p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <CheckCircle2 className="w-6 h-6 text-emerald-500" />
-                <div>
-                  <span className="font-bold text-base text-slate-900 dark:text-white">
-                    Hab. {item.rooms?.room_number || 'N/A'}
-                  </span>
-                  <p className="text-xs text-slate-500">
-                    {item.rooms?.room_type || 'Estándar'} • {item.rooms?.zone || 'Piso 1'}
-                  </p>
+            <div key={item.id} className="bg-white dark:bg-[#131927] p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-3">
+                  <CheckCircle2 className="w-6 h-6 text-emerald-500" />
+                  <div>
+                    <span className="font-bold text-base text-slate-900 dark:text-white">
+                      Hab. {item.rooms?.room_number || 'N/A'}
+                    </span>
+                    <p className="text-xs text-slate-500">
+                      {item.rooms?.room_type_config?.room_type || 'Estándar'} • {item.rooms?.zonas?.nombre || 'Piso 1'}
+                    </p>
+                  </div>
                 </div>
+                {item.cumplio_sla !== null && (
+                  <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${
+                    item.cumplio_sla ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+                  }`}>
+                    {item.cumplio_sla ? '✓ A tiempo' : '✗ Excedido'}
+                  </span>
+                )}
               </div>
-              <span className="text-[10px] text-slate-400">
-                {new Date(item.fecha_cambio).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </span>
+              <div className="flex flex-wrap gap-4 text-[10px] text-slate-500">
+                <span className="flex items-center gap-1">
+                  <Clock className="w-3 h-3" />
+                  {item.duracion_min !== null ? `${item.duracion_min} min` : '—'}
+                </span>
+                {item.sla_min !== null && (
+                  <span className="flex items-center gap-1">
+                    <Target className="w-3 h-3" />
+                    SLA {item.sla_min} min
+                  </span>
+                )}
+                {item.minutos_excedidos !== null && item.minutos_excedidos > 0 && (
+                  <span className="flex items-center gap-1 text-rose-500">
+                    <AlertTriangle className="w-3 h-3" />
+                    +{item.minutos_excedidos} min excedidos
+                  </span>
+                )}
+                {item.personal_nombre && (
+                  <span className="flex items-center gap-1">
+                    <User className="w-3 h-3" />
+                    {item.personal_nombre}
+                  </span>
+                )}
+              </div>
+              <div className="mt-2 flex justify-between text-[10px] text-slate-400">
+                <span>Inicio: {item.iniciado_at ? new Date(item.iniciado_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+                <span>Fin: {new Date(item.finalizado_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+              </div>
             </div>
           ))
         )}

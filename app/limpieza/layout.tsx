@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { BedDouble, History, User, Sparkles } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import NotificationBell from '@/components/NotificationBell';
 import { supabase } from '@/lib/supabase';
 
 interface UserProfile {
@@ -68,6 +69,7 @@ export default function LimpiezaLayout({ children }: { children: React.ReactNode
           </div>
 
           <div className="flex items-center gap-2">
+            <NotificationBell />
             <ThemeToggle />
             <div className="flex items-center gap-1.5 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-400 px-2.5 py-1 rounded-full text-xs">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>

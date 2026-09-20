@@ -15,12 +15,13 @@ Navegador / App Android (Capacitor)
 Supabase (multi-tenant, RLS por hotel_id)
    ▲
    │  Service Role (solo en Edge Functions / n8n)
-n8n  ── webhooks ──►  notificaciones / rooms
+n8n  ── webhooks ──►  rooms
 ```
 
 - **Frontend**: `app/` (rutas), componentes en `components/` y por módulo.
 - **Backend/BD**: Supabase. Todo el aislamiento se hace con `hotel_id` + RLS.
-- **Automatización**: n8n recibe webhooks de la app y escribe notificaciones/estados vía REST.
+- **Automatización**: n8n recibe webhooks de la app y escribe estados vía REST (p. ej. `Check-Out → Sucia`).
+- **Notificaciones del panel**: locales en el cliente, generadas al detectar transiciones de `rooms` por Realtime (sin tabla de notificaciones en la BD).
 - **Móvil**: Capacitor empaqueta el build estático (`out/`) en Android.
 
 ## 2. Estructura de carpetas
@@ -54,16 +55,18 @@ n8n  ── webhooks ──►  notificaciones / rooms
 | `rooms` | id, hotel_id, zona_id, room_number, room_type, zone, status, cleaning_started_at | Entidad operativa. Estados: Disponible, Ocupada, Check-Out, Sucia, En Limpieza, Limpia/Lista, Mantenimiento. |
 | `historial_estados_habitacion` | id, hotel_id, habitacion_id, usuario_id, estado_anterior, estado_nuevo, fecha_cambio, duracion_min, cumplio_sla | Bitácora **alimentada por trigger**. |
 | `room_type_config` | id, hotel_id, room_type, tiempo_estandar_min, sla_min | Parametrización de tiempos (RF-05). UNIQUE(hotel_id, room_type). |
-| `notificaciones` | id, hotel_id, habitacion_id, titulo, mensaje, tipo, leida, created_at | Avisos insertados por n8n y mostrados en el panel. |
 | `metricas_limpieza` | hotel_id (PK), total_limpiezas, suma_duracion_min, sla_cumplidas, sla_retrasadas, updated_at | Resumen KPIs por hotel, **mantenido O(1) por trigger**. |
 | `metricas_limpieza_detalle` | hotel_id + dimension + clave (PK), nombre, limpiezas, suma_duracion_min, cumplidas | Desglose por `tipo`/`zona`/`personal` para los gráficos, mantenido por el mismo trigger. |
 
+> Las notificaciones del panel de limpieza (toast + campana) son puramente **client-side**:
+> `components/NotificationBell.tsx` detecta la transición de una habitación a `Sucia` vía Realtime
+> sobre `rooms` y dispara sonido + aviso. No existe `notificaciones` en la base.
+
 ### Orden de ejecución de migraciones
 1. `20260915_cleaning_tracking.sql`
-2. `20260916_notificaciones.sql`
-3. `20260917_historial_trigger_rn01.sql`
-4. `20260918_metricas_limpieza.sql` (métricas realtime del admin)
-5. `20260919_registro_hotel.sql` (políticas de autoregistro de hoteles y perfiles)
+2. `20260917_historial_trigger_rn01.sql`
+3. `20260918_metricas_limpieza.sql` (métricas realtime del admin)
+4. `20260919_registro_hotel.sql` (políticas de autoregistro de hoteles y perfiles)
 
 ## 4. Trazabilidad de requisitos
 

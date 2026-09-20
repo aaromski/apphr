@@ -38,38 +38,11 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [500, 300]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "https://earlammmyhbcnkzlddzs.supabase.co/rest/v1/notificaciones",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "apikey", "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVhcmxhbW1teWhiY25remxkZHpzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODg0ODU1NSwiZXhwIjoyMTA0NDI0NTU1fQ.uNP-GUr-Nw_yapzuFi39nrgQYRINbGbnavWu77op5rg" },
-            { "name": "Authorization", "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVhcmxhbW1teWhiY25remxkZHpzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODg0ODU1NSwiZXhwIjoyMTA0NDI0NTU1fQ.uNP-GUr-Nw_yapzuFi39nrgQYRINbGbnavWu77op5rg" },
-            { "name": "Content-Type", "value": "application/json" },
-            { "name": "Prefer", "value": "return=minimal" }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"hotel_id\": \"{{ $('Webhook Check-Out').item.json.body.hotel_id }}\",\n  \"titulo\": \"Nueva limpieza en cola\",\n  \"mensaje\": \"Habitación {{ $('Webhook Check-Out').item.json.body.habitacion }} ({{ $('Webhook Check-Out').item.json.body.zona }}) pendiente de limpieza por check-out.\",\n  \"tipo\": \"info\",\n  \"leida\": false\n}",
-        "options": {}
-      },
-      "id": "b1b2c3d4-0002-4000-8000-000000000003",
-      "name": "Notificar a Limpieza",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [760, 300]
     }
   ],
   "connections": {
     "Webhook Check-Out": {
       "main": [[{ "node": "Marcar Habitación Sucia", "type": "main", "index": 0 }]]
-    },
-    "Marcar Habitación Sucia": {
-      "main": [[{ "node": "Notificar a Limpieza", "type": "main", "index": 0 }]]
     }
   },
   "active": false,

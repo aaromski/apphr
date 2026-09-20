@@ -36,21 +36,27 @@ interface UserProfile {
   };
 }
 
-interface HistorialItem {
+interface CicloLimpieza {
   id: string;
+  habitacion_id: string;
+  room_number: string;
+  room_type: string;
+  zone: string | null;
+  usuario_id: string | null;
+  personal_nombre: string | null;
+  estado_origen: string;
+  sucia_at: string | null;
+  iniciado_at: string | null;
+  finalizado_at: string;
   duracion_min: number | null;
+  sla_min: number | null;
   cumplio_sla: boolean | null;
-  fecha_cambio: string;
-  rooms?:
-    | {
-        room_number?: string;
-        room_type?: string;
-      }
-    | Array<{
-        room_number?: string;
-        room_type?: string;
-      }>
-    | null;
+  minutos_excedidos: number | null;
+  rooms?: {
+    room_number: string;
+    room_type_config?: { room_type: string } | null;
+    zonas?: { nombre: string } | null;
+  } | null;
 }
 
 interface Notificacion {
@@ -77,7 +83,7 @@ export default function PerfilPage() {
 
   // Desempeño y Métricas
   const [desempenoLoading, setDesempenoLoading] = useState(false);
-  const [historial, setHistorial] = useState<HistorialItem[]>([]);
+  const [historial, setHistorial] = useState<CicloLimpieza[]>([]);
 
   // Notificaciones del Turno
   const [notifsLoading, setNotifsLoading] = useState(false);
@@ -147,66 +153,91 @@ export default function PerfilPage() {
     const inicioHoy = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
 
     const { data, error } = await supabase
-      .from('historial_estados_habitacion')
+      .from('ciclos_limpieza')
       .select(`
         id,
+        habitacion_id,
+        usuario_id,
+        personal_nombre,
+        estado_origen,
+        sucia_at,
+        iniciado_at,
+        finalizado_at,
         duracion_min,
+        sla_min,
         cumplio_sla,
-        fecha_cambio,
-        rooms ( room_number, room_type )
+        minutos_excedidos,
+        rooms (
+          room_number,
+          room_type_config ( room_type ),
+          zonas ( nombre )
+        )
       `)
       .eq('usuario_id', profile.id)
-      .eq('estado_nuevo', 'Limpia/Lista')
-      .gte('fecha_cambio', inicioHoy)
-      .order('fecha_cambio', { ascending: false });
+      .not('finalizado_at', 'is', null)
+      .gte('finalizado_at', inicioHoy)
+      .order('finalizado_at', { ascending: false });
 
     if (error) {
       console.error('Error al cargar desempeño:', error.message);
     }
 
     if (data) {
-      setHistorial(data as unknown as HistorialItem[]);
+      setHistorial(data as unknown as CicloLimpieza[]);
     }
 
     setDesempenoLoading(false);
   };
 
-  // ---- Notificaciones del Turno (histórico reciente) ----
+  // ---- Avisos del Turno (habitaciones que pasaron a Sucia hoy, leído del historial) ----
   const cargarNotificaciones = async () => {
     setNotifsLoading(true);
 
+    const inicioHoy = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
+
     const { data, error } = await supabase
-      .from('notificaciones')
-      .select('*')
-      .order('created_at', { ascending: false })
+      .from('historial_estados_habitacion')
+      .select(`
+        id,
+        fecha_cambio,
+        rooms ( room_number )
+      `)
+      .eq('estado_nuevo', 'Sucia')
+      .gte('fecha_cambio', inicioHoy)
+      .order('fecha_cambio', { ascending: false })
       .limit(30);
 
     if (error) {
-      console.error('Error al cargar notificaciones:', error.message);
+      console.error('Error al cargar avisos:', error.message);
     }
 
     if (data) {
-      setNotificaciones(data as unknown as Notificacion[]);
+      const avisos = (data as unknown as { id: string; fecha_cambio: string; rooms?: { room_number: string } | { room_number: string }[] }[])
+        .map((h) => {
+          const room = Array.isArray(h.rooms) ? h.rooms[0] : h.rooms;
+          const numero = room?.room_number || '?';
+          return {
+            id: h.id,
+            titulo: `Habitación ${numero} sucia`,
+            mensaje: `La habitación ${numero} necesita limpieza`,
+            tipo: 'sucia',
+            leida: false,
+            created_at: h.fecha_cambio,
+          } as Notificacion;
+        });
+      setNotificaciones(avisos);
     }
 
     setNotifsLoading(false);
   };
 
   const marcarTodasLeidas = async () => {
-    const noLeidas = notificaciones.filter((n) => !n.leida);
-    if (noLeidas.length === 0) return;
-
     setNotificaciones((prev) => prev.map((n) => ({ ...n, leida: true })));
-    await supabase
-      .from('notificaciones')
-      .update({ leida: true })
-      .in('id', noLeidas.map((n) => n.id));
   };
 
   const marcarLeida = async (n: Notificacion) => {
     if (n.leida) return;
     setNotificaciones((prev) => prev.map((it) => (it.id === n.id ? { ...it, leida: true } : it)));
-    await supabase.from('notificaciones').update({ leida: true }).eq('id', n.id);
   };
 
   // ---- Seguridad: cambio de contraseña via Supabase Auth ----
@@ -276,10 +307,10 @@ export default function PerfilPage() {
   const slaCumplidas = historial.filter((h) => h.cumplio_sla === true).length;
   const slaPct = limpiezasHoy ? Math.round((slaCumplidas / limpiezasHoy) * 100) : 0;
 
-  const getRoom = (h: HistorialItem) => {
-    if (Array.isArray(h.rooms)) return h.rooms[0];
-    return h.rooms;
-  };
+  const getRoomInfo = (h: CicloLimpieza) => ({
+    room_number: h.rooms?.room_number || '',
+    room_type: h.rooms?.room_type_config?.room_type || 'Estándar',
+  });
 
   const abrirDesempeno = () => {
     setSection('desempeno');
@@ -293,7 +324,7 @@ export default function PerfilPage() {
 
   const getNotifIcon = (tipo: string) => {
     const t = (tipo || '').toLowerCase();
-    if (t.includes('sla') || t.includes('límite') || t.includes('limite') || t.includes('tarde')) {
+    if (t.includes('sucia') || t.includes('sla') || t.includes('límite') || t.includes('limite') || t.includes('tarde')) {
       return <TriangleAlert className="w-5 h-5 text-rose-500" />;
     }
     if (t.includes('check') || t.includes('lista') || t.includes('complet')) {
@@ -471,7 +502,7 @@ export default function PerfilPage() {
                       </div>
                     ) : (
                       historial.map((h) => {
-                        const room = getRoom(h);
+                        const room = getRoomInfo(h);
                         const ok = h.cumplio_sla === true;
                         return (
                           <div key={h.id} className="p-3.5 flex items-center justify-between gap-2">
@@ -509,7 +540,7 @@ export default function PerfilPage() {
                                 {h.duracion_min != null ? `${h.duracion_min} min` : '--'}
                               </span>
                               <p className="text-[10px] text-slate-400 mt-0.5">
-                                {formatFecha(h.fecha_cambio)}
+                                {formatFecha(h.finalizado_at)}
                               </p>
                             </div>
                           </div>

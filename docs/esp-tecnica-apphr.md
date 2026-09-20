@@ -27,10 +27,10 @@ Sistema de Gestión y Optimización en la Asignación de Habitaciones Hoteleras.
 
 ### 1.3 Automatización
 
-- **n8n** (instancia cloud): dos workflows importables.
-  - `workflow-sla-alerta`: recibe el evento de violación de tiempo límite del panel de limpieza e inserta una notificación.
-  - `workflow-checkout-sucia`: recibe el evento de Check-Out desde recepción, marca la habitación como *Sucia* mediante PATCH a `rooms` y notifica al panel de limpieza.
+- **n8n** (instancia cloud): un workflow importable.
+  - `workflow-checkout-sucia`: recibe el evento de Check-Out desde recepción y marca la habitación como *Sucia* mediante PATCH a `rooms`.
   - n8n opera con la **Service Role Key** (omite RLS).
+  - Los avisos del panel de limpieza son **client-side** (Realtime sobre `rooms`, sin tabla `notificaciones` en la base).
 
 ### 1.4 Móvil / Despliegue
 
@@ -60,7 +60,10 @@ Todos los datos operativos residen en el esquema `public`. Convenciones: PK dete
 | **rooms** | `id` (PK), `hotel_id` (FK → hotels), `zona_id` (FK → zonas), `room_number`, `room_type`, `zone` (denormalizado), `status`, `cleaning_started_at`, `updated_at` | Unicidad compuesta de `hotel_id + room_number`. `zone` guarda el nombre del piso en texto para reportes y filtros. `cleaning_started_at` es el timestamp de inicio del cronómetro. |
 | **historial_estados_habitacion** | `id` (PK), `hotel_id`, `habitacion_id` (FK → rooms), `usuario_id` (FK → profiles), `estado_anterior`, `estado_nuevo`, `fecha_cambio`, `duracion_min`, `cumplio_sla` | Bitácora de transiciones de estado alimentada por trigger. Índices sobre `fecha_cambio`, `habitacion_id` y `usuario_id`. |
 | **room_type_config** | `id` (PK), `hotel_id` (FK → hotels), `room_type`, `tiempo_estandar_min` (default 30), `sla_min` (default 45), `created_at`, `updated_at` | Unicidad compuesta `hotel_id + room_type`. Parametrización de tiempos por tipo de habitación. |
-| **notificaciones** | `id` (PK), `hotel_id` (FK → hotels), `habitacion_id` (FK → rooms), `titulo`, `mensaje`, `tipo`, `leida`, `created_at` | Insertadas por n8n (Service Role); leídas/marcadas como leídas por el panel. Suscrita a Realtime. |
+
+> **Nota:** las notificaciones del panel de limpieza son **locales al cliente** (`components/NotificationBell.tsx`).
+> El panel detecta la transición de una habitación a `Sucia` vía Realtime sobre `rooms` y genera sonido + toast
+> + historial en memoria. **No existe tabla `notificaciones`** en la base de datos.
 
 ### 2.2 Tablas analíticas precomputadas (mantenidas por trigger)
 
@@ -78,7 +81,7 @@ Nota de diseño: las tablas analíticas son **materializadas** — un trigger la
 ### 2.4 Arquitectura multi-tenant (hotel_id)
 
 - **Principio:** cada fila de las tablas operativas y analíticas lleva `hotel_id`, que identifica al "inquilino".
-- **Aplicación en la base:** políticas RLS comparan el `hotel_id` de la fila contra el `hotel_id` del perfil del usuario autenticado (`auth.uid()`). Ejemplos: lectura de `rooms`, `zonas`, `room_type_config`, `notificaciones` y `metricas_*` limitadas "al mismo hotel".
+- **Aplicación en la base:** políticas RLS comparan el `hotel_id` de la fila contra el `hotel_id` del perfil del usuario autenticado (`auth.uid()`). Ejemplos: lectura de `rooms`, `zonas`, `room_type_config` y `metricas_*` limitadas "al mismo hotel".
 - **Aplicación en la aplicación:** todas las consultas del cliente anteponen `eq('hotel_id', <hotel del perfil>)`.
 - **Excepciones intencionadas:**
   - `hotels` permite `INSERT` y `SELECT` públicos para habilitar el autoregistro y el inicio de sesión por código.
@@ -138,7 +141,7 @@ Layout con **sidebar lateral** (Dashboard Gerencial, Gestión Paramétrica, Gest
 - **Filtros rápidos** por cada estado + selector de zona/piso.
 - **Grid de habitaciones** en tiempo real: cada tarjeta muestra número, tipo, estado con color semántico y un `select` para **cambiar el estado operativo**.
 - **Cronómetro de limpieza:** mientras la habitación está "En Limpieza" muestra el tiempo transcurrido con semáforo (ámbar normal / rojo pulsante al exceder el tiempo límite) y etiqueta "Tiempo excedido".
-- **Integración con n8n:** al establecer "Check-Out" se dispara el webhook que marca la habitación como Sucia y notifica al personal de limpieza.
+- **Integración con n8n:** al establecer "Check-Out" se dispara el webhook que marca la habitación como Sucia para la cola de limpieza.
 
 ### 3.4 Módulo Limpieza (`/limpieza`, móvil con barra inferior)
 
@@ -152,8 +155,8 @@ Layout mobile-first (máximo ancho tipo móvil, header con rol del usuario y nav
   - Botón **"Iniciar Limpieza"**: registra estado "En Limpieza" y `cleaning_started_at`.
   - Durante la limpieza: cronómetro en vivo, **barra de progreso** vs tiempo estándar (verde/ámbar/rojo) y etiqueta del **tiempo límite**.
   - Botón **"Marcar Limpia / Lista"**: finaliza, calcula duración y cumplimiento del tiempo límite, y muestra mensaje confirmatoria.
-- **Alertas de tiempo límite:** al superar el límite de una limpieza en curso se notifica al webhook n8n (una única vez por habitación) para que inserte la notificación.
-- **Panel de notificaciones del turno** (insertadas por n8n) con opción de marcar como leídas.
+- **Alertas de tiempo límite:** al superar el límite de una limpieza en curso se refleja en el cronómetro/barra (rojo) y se notifica al webhook n8n (una única vez por habitación).
+- **Panel de notificaciones del turno (client-side):** campana en el header que muestra, con sonido y toast, las habitaciones que pasan a `Sucia` en tiempo real; historial local con "marcar como leídas" y "limpiar".
 
 **Pestaña Historial (`/limpieza/historial`)**
 
@@ -180,11 +183,11 @@ Cadena canónica:
 **Disponible → Ocupada → Check-Out → Sucia → En Limpieza → Limpia/Lista → Disponible** (con **Mantenimiento** como estado lateral).
 
 - **RN-01 (inmutabilidad de transición):** un trigger impide pasar una habitación a "Disponible" desde cualquier estado intermedio; debe completar antes el ciclo Check-Out → Limpia/Lista. Esto evita asignar habitaciones no verificadas.
-- **Automatización post Check-Out (RF-04):** al registrar Check-Out, recepción dispara el webhook n8n que marca la habitación como "Sucia" y encola la tarea de limpieza, además de notificar al panel.
+- **Automatización post Check-Out (RF-04):** al registrar Check-Out, recepción dispara el webhook n8n que marca la habitación como "Sucia" y encola la tarea de limpieza.
 
 ### 4.3 Sincronización en tiempo real (Supabase Realtime)
 
-- **Suscripciones activas:** estado de habitaciones (`rooms`), notificaciones (`notificaciones`) y métricas gerenciales (`metricas_limpieza` y `metricas_limpieza_detalle`).
+- **Suscripciones activas:** estado de habitaciones (`rooms`) y métricas gerenciales (`metricas_limpieza` y `metricas_limpieza_detalle`).
 - **Comportamiento:** cualquier `INSERT/UPDATE/DELETE` en esas tablas se propaga por WebSocket a los paneles conectados (limpieza, recepción y dashboard) sin recargar.
 - **Detalle técnico:** las tablas de métricas usan `REPLICA IDENTITY FULL` para que los eventos de escritura incluyan el `hotel_id` y el filtro de suscripción por hotel funcione correctamente.
 

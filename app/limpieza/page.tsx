@@ -1,18 +1,55 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { flushSync } from 'react-dom';
 import { supabase } from '@/lib/supabase';
-import { BellRing, CheckCircle2, Clock, Timer, TriangleAlert, Star, X } from 'lucide-react';
+import { CheckCircle2, Clock, Timer, TriangleAlert, Star } from 'lucide-react';
+
+// ─── Server Time Sync ──────────────────────────────────────────────
+// Mide el offset entre reloj local y servidor (Supabase) una sola vez al cargar.
+// Usa SELECT now() vía RPC o una query ligera para obtener now() del servidor.
+async function getServerTimeOffset(): Promise<number | null> {
+  const requestStartedAt = Date.now();
+
+  try {
+    const { data, error } = await supabase.rpc('get_server_time');
+    const requestFinishedAt = Date.now();
+
+    if (error || !data) return null;
+
+    const serverMs = Date.parse(String(data));
+
+    if (!Number.isFinite(serverMs)) {
+      return null;
+    }
+
+    // Usamos el punto medio de la petición para compensar la latencia
+    const localMidpoint =
+      requestStartedAt + (requestFinishedAt - requestStartedAt) / 2;
+
+    return serverMs - localMidpoint;
+  } catch {
+    return null;
+  }
+}
+
+
+interface RoomTypeConfig {
+  id: string;
+  room_type: string;
+  tiempo_estandar_min: number;
+  sla_min: number;
+}
 
 interface Room {
   id: string;
   room_number: string;
-  room_type?: string;
-  zone?: string;
+  tipo_habitacion_id?: string | null;
+  room_type_config?: RoomTypeConfig | null;
+  zona_id?: string | null;
+  zonas?: { nombre: string } | null;
   status: string;
   hotel_id: string;
-  cleaning_timer?: string;
-  cleaning_started_at?: string | null;
   is_priority?: boolean;
 }
 
@@ -28,19 +65,98 @@ interface TypeConfig {
   sla_min: number;
 }
 
-interface Notificacion {
-  id: string;
-  hotel_id: string;
-  habitacion_id?: string | null;
-  titulo: string;
-  mensaje: string;
-  tipo: string;
-  leida: boolean;
-  created_at: string;
-}
+// Normaliza la comparación de estados sucios
+const isSucia = (status: string) => {
+  const st = (status || '').toLowerCase();
+  return st === 'sucia' || st === 'dirty';
+};
+
+// Normaliza la comparación de estados en limpieza
+const isInProgress = (status: string) => {
+  const st = (status || '').toLowerCase();
+  return st === 'en limpieza' || st === 'in progress';
+};
+
+// Resuelve quién inició la limpieza de cada habitación "En Limpieza"
+// consultando los ciclos activos en ciclos_limpieza.
+const fetchOwners = async (rooms: Room[]): Promise<Record<string, string | null>> => {
+  const ids = rooms.filter((r) => isInProgress(r.status)).map((r) => r.id);
+  if (ids.length === 0) return {};
+
+  const { data } = await supabase
+    .from('ciclos_limpieza')
+    .select('habitacion_id, usuario_id')
+    .in('habitacion_id', ids)
+    .is('finalizado_at', null);
+
+  const owners: Record<string, string | null> = {};
+  for (const row of data ?? []) {
+    if (row.habitacion_id && row.usuario_id) {
+      owners[row.habitacion_id] = row.usuario_id;
+    }
+  }
+  return owners;
+};
+
+// Usuario que inició el ciclo activo de una habitación concreta
+const refreshRoomOwner = async (roomId: string) => {
+  const { data } = await supabase
+    .from('ciclos_limpieza')
+    .select('usuario_id')
+    .eq('habitacion_id', roomId)
+    .is('finalizado_at', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return data?.usuario_id ?? null;
+};
+
+// Obtiene el inicio de limpieza (iniciado_at) desde ciclos_limpieza para una habitación en "En Limpieza"
+const fetchCleaningStart = async (roomId: string): Promise<number | null> => {
+  const { data } = await supabase
+    .from('ciclos_limpieza')
+    .select('iniciado_at')
+    .eq('habitacion_id', roomId)
+    .is('finalizado_at', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const ms = data?.iniciado_at ? Date.parse(data.iniciado_at) : null;
+  return Number.isFinite(ms) ? ms : null;
+};
+
+// Carga los inicios de limpieza para todas las habitaciones "En Limpieza"
+const fetchAllCleaningStarts = async (rooms: Room[]): Promise<Record<string, number>> => {
+  const inProgressIds = rooms.filter((r) => isInProgress(r.status)).map((r) => r.id);
+  if (inProgressIds.length === 0) return {};
+
+  const { data } = await supabase
+    .from('ciclos_limpieza')
+    .select('habitacion_id, iniciado_at')
+    .in('habitacion_id', inProgressIds)
+    .is('finalizado_at', null);
+
+  const starts: Record<string, number> = {};
+  for (const row of data ?? []) {
+    if (row.habitacion_id && row.iniciado_at) {
+      const ms = Date.parse(row.iniciado_at);
+      if (Number.isFinite(ms)) {
+        starts[row.habitacion_id] = ms;
+      }
+    }
+  }
+  return starts;
+};
 
 export default function LimpiezaMobilePage() {
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  // owners[habitacion_id] = usuario_id de quien inició la limpieza (null = sin atribuir)
+  const [owners, setOwners] = useState<Record<string, string | null>>({});
+  // cleaningStarts[habitacion_id] = iniciado_at from ciclos_limpieza (milisegundos UTC epoch)
+  const [cleaningStarts, setCleaningStarts] = useState<Record<string, number>>({});
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [typeConfigs, setTypeConfigs] = useState<Record<string, TypeConfig>>({});
   const [loading, setLoading] = useState(true);
@@ -48,18 +164,76 @@ export default function LimpiezaMobilePage() {
   const [selectedZone, setSelectedZone] = useState<string | null>(null);
   const [prioritariasOnly, setPrioritariasOnly] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [notificaciones, setNotificaciones] = useState<Notificacion[]>([]);
 
   // Evita disparar el webhook de tiempo límite en cada tick para la misma habitación
   const slaNotifiedRef = useRef<Set<string>>(new Set());
+  // Protección realtime: rooms iniciados localmente (evita sobrescritura por realtime)
+  const localStartRef = useRef<Record<string, number>>({});
 
-  // Reloj base para todos los cronómetros (tick cada segundo)
-  const [now, setNow] = useState<number>(() => Date.now());
+  // ─── Server Time Sync ───────────────────────────────────────────
+  // Offset en ms = serverTime - localTime. Se calcula una vez al montar.
+  const [serverOffset, setServerOffset] = useState<number>(0);
+  const [offsetReady, setOffsetReady] = useState(false);
 
-  useEffect(() => {
-    const tick = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(tick);
-  }, []);
+  // Tiempo "servidor" actual = localNow + offset. Se actualiza cada segundo.
+  const [serverNow, setServerNow] = useState<number>(() => Date.now());
+
+ useEffect(() => {
+  let cancelled = false;
+
+  const syncServerTime = async () => {
+    const offset = await getServerTimeOffset();
+
+    if (cancelled) return;
+
+    if (offset === null) {
+      console.warn('No se pudo sincronizar la hora con Supabase');
+      setOffsetReady(false);
+      return;
+    }
+
+    const now = Date.now() + offset;
+
+    setServerOffset(offset);
+
+    // Muy importante: actualizar inmediatamente serverNow
+    setServerNow(now);
+
+    setOffsetReady(true);
+  };
+
+  syncServerTime();
+
+  return () => {
+    cancelled = true;
+  };
+}, []);
+
+
+  // Reloj base "servidor" (tick cada segundo)
+useEffect(() => {
+  if (!offsetReady) return;
+
+  // Actualización inmediata al cambiar el offset
+  setServerNow(Date.now() + serverOffset);
+
+  const tick = setInterval(() => {
+    setServerNow(Date.now() + serverOffset);
+  }, 1000);
+
+  return () => clearInterval(tick);
+}, [serverOffset, offsetReady]);
+
+
+  // ---- Tarea única del personal de limpieza ---------------
+  // La camarera solo puede tener UNA habitación "En Limpieza" a la vez;
+  // el resto de botones "Iniciar Limpieza" quedan bloqueados.
+  const isLimpiezaRole = userProfile?.role === 'limpieza';
+  const myInProgressRooms = rooms.filter(
+    (r) => isInProgress(r.status) && isLimpiezaRole && owners[r.id] === currentUserId
+  );
+  const hasActiveTask = myInProgressRooms.length > 0;
+  const currentTaskRoom = myInProgressRooms[0] ?? null;
 
   // 1. Cargar usuario activo y su perfil
   useEffect(() => {
@@ -67,6 +241,8 @@ export default function LimpiezaMobilePage() {
       const { data: { user } } = await supabase.auth.getUser();
 
       if (user) {
+        setCurrentUserId(user.id);
+
         const { data: profile } = await supabase
           .from('profiles')
           .select('nombre, role, hotel_id')
@@ -123,17 +299,29 @@ export default function LimpiezaMobilePage() {
     const fetchRooms = async () => {
       const { data } = await supabase
         .from('rooms')
-        .select('*')
+        .select(`
+          *,
+          room_type_config:tipo_habitacion_id ( id, room_type, tiempo_estandar_min, sla_min ),
+          zonas:zona_id ( nombre )
+        `)
         .order('room_number', { ascending: true });
 
-      if (data) setRooms(data);
+      if (data) {
+        setRooms(data);
+        // Resolver quién está limpiando cada habitación "En Limpieza" (historial)
+        const ownersMap = await fetchOwners(data);
+        setOwners(ownersMap);
+        // Obtener inicios de limpieza desde ciclos_limpieza
+        const startsMap = await fetchAllCleaningStarts(data);
+        setCleaningStarts(startsMap);
+      }
       setLoading(false);
     };
 
     fetchRooms();
   }, []);
 
-  // 3. Suscripción en tiempo real (habitaciones y notificaciones n8n)
+  // 3. Suscripción en tiempo real (habitaciones)
   useEffect(() => {
     const channel = supabase
       .channel('limpieza-rooms-changes')
@@ -143,7 +331,45 @@ export default function LimpiezaMobilePage() {
         (payload) => {
           if (payload.eventType === 'UPDATE') {
             const updated = payload.new as Room;
+            const prevStatus = payload.old?.status;
             setRooms((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+
+            // Al entrar en "En Limpieza": refrescar propietario y obtener inicio de limpieza
+            if (isInProgress(updated.status) && prevStatus !== 'En Limpieza') {
+              refreshRoomOwner(updated.id).then((ownerId) =>
+                setOwners((prev) => ({ ...prev, [updated.id]: ownerId }))
+              );
+
+            // Protección realtime: NO sobrescribir si el usuario local acaba de iniciar esta habitación
+            // (esperamos a que el realtime confirme, pero no sobrescribimos el timer local)
+            const isLocalStart = localStartRef.current[updated.id] != null;
+            if (!isLocalStart) {
+              fetchCleaningStart(updated.id).then((iniciadoAt) => {
+                if (iniciadoAt) {
+                  setCleaningStarts((prev) => ({ ...prev, [updated.id]: iniciadoAt }));
+                }
+              });
+            } else {
+              // Limpiar protección tras confirmar vía realtime
+              delete localStartRef.current[updated.id];
+            }
+          }
+
+            // Al SALIR de "En Limpieza" (cambio a Limpia/Lista, Disponible, Ocupada, etc.):
+            // limpiar el timer optimista para detener el cronómetro inmediato
+            if (prevStatus === 'En Limpieza' && !isInProgress(updated.status)) {
+              setCleaningStarts((prev) => {
+                const next = { ...prev };
+                delete next[updated.id];
+                return next;
+              });
+              setOwners((prev) => {
+                const next = { ...prev };
+                delete next[updated.id];
+                return next;
+              });
+              delete localStartRef.current[updated.id];
+            }
           } else if (payload.eventType === 'INSERT') {
             setRooms((prev) => [...prev, payload.new as Room]);
           } else if (payload.eventType === 'DELETE') {
@@ -153,39 +379,26 @@ export default function LimpiezaMobilePage() {
       )
       .subscribe();
 
-    const notifChannel = supabase
-      .channel('limpieza-notificaciones-changes')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'notificaciones' },
-        (payload) => {
-          const nueva = payload.new as Notificacion;
-          if (nueva?.id) {
-            setNotificaciones((prev) => [nueva, ...prev].slice(0, 50));
-          }
-        }
-      )
-      .subscribe();
-
-    const fetchNotificaciones = async () => {
-      const { data } = await supabase
-        .from('notificaciones')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(20);
-      if (data) setNotificaciones(data.filter((n) => !n.leida));
-    };
-    fetchNotificaciones();
-
     return () => {
       supabase.removeChannel(channel);
-      supabase.removeChannel(notifChannel);
     };
   }, []);
 
   // ---- Helpers de tiempo ----
-  const getElapsed = (startedAt?: string | null): number =>
-    startedAt ? Math.max(0, now - new Date(startedAt).getTime()) : 0;
+  // Obtiene el inicio de limpieza para una habitación (desde ciclos_limpieza.iniciado_at)
+  // Devuelve milisegundos UTC epoch o null si no existe
+  const getCleaningStart = (roomId: string): number | null => {
+    return cleaningStarts[roomId] ?? null;
+  };
+
+  const getElapsed = (roomId: string): number => {
+    const startedMs = getCleaningStart(roomId);
+    if (startedMs === null) return 0;
+    // Usa serverNow (tiempo sincronizado con servidor) para calcular elapsed
+    const elapsed = serverNow - startedMs;
+    // Evita valores negativos por desfase de reloj cliente/servidor
+    return elapsed > 0 ? elapsed : 0;
+  };
 
   const formatDuration = (ms: number): string => {
     const total = Math.floor(ms / 1000);
@@ -195,70 +408,216 @@ export default function LimpiezaMobilePage() {
   };
 
   // ---- Iniciar limpieza ----
+ // ---- Iniciar limpieza ----
   const handleStartCleaning = async (room: Room) => {
-    const startedAt = new Date().toISOString();
-
-    // Actualización optimista
-    setRooms((prev) =>
-      prev.map((r) =>
-        r.id === room.id ? { ...r, status: 'En Limpieza', cleaning_started_at: startedAt } : r
-      )
-    );
-
-    const { error } = await supabase
-      .from('rooms')
-      .update({ status: 'En Limpieza', cleaning_started_at: startedAt })
-      .eq('id', room.id);
-
-    if (error) {
-      console.error('Error al iniciar limpieza:', error.message);
-      setRooms((prev) =>
-        prev.map((r) =>
-          r.id === room.id
-            ? { ...r, status: room.status, cleaning_started_at: room.cleaning_started_at }
-            : r
-        )
-      );
-      alert(`No se pudo iniciar la limpieza: ${error.message}`);
+    if (!offsetReady) {
+      setToastMessage('Sincronizando la hora del servidor. Intenta de nuevo en un momento.');
+      setTimeout(() => setToastMessage(null), 3000);
+      return;
     }
-  };
-
-  // ---- Completar limpieza: registra duración real y cumplimiento de tiempo límite ----
-  const handleFinishCleaning = async (room: Room) => {
-    const durationMs = getElapsed(room.cleaning_started_at);
-    const durationMin = Math.round(durationMs / 60000);
-
-    const cfg = typeConfigs[room.room_type || ''];
-    const slaMin = cfg?.sla_min ?? 45;
-    const cumplioSla = durationMin <= slaMin;
-
-    // Actualización optimista
-    setRooms((prev) =>
-      prev.map((r) =>
-        r.id === room.id ? { ...r, status: 'Limpia/Lista', cleaning_started_at: null } : r
-      )
-    );
-
-    // 1. Petición principal para actualizar la habitación en Supabase
-    const { error } = await supabase
-      .from('rooms')
-      .update({ status: 'Limpia/Lista', cleaning_started_at: null })
-      .eq('id', room.id);
-
-    if (error) {
-      console.error('Error al actualizar:', error.message);
-      alert(`No se pudo cambiar el estado: ${error.message}`);
-      setRooms((prev) => prev.map((r) => (r.id === room.id ? { ...room } : r)));
+    if (hasActiveTask && isLimpiezaRole) {
+      setToastMessage(
+        `Primero finaliza la limpieza de la habitación ${currentTaskRoom?.room_number ?? ''} ` +
+          'para poder iniciar otra.'
+      );
       return;
     }
 
-    // 2. El historial (duración real y cumplimiento) lo registra automáticamente el
-    //    trigger trg_rooms_log_historial en PostgreSQL al cambiar el estado.
+    // Obtener timestamp sincronizado con servidor AHORA
+    const serverStartMs = serverNow;
+    const serverStartIso = new Date(serverStartMs).toISOString();
+
+    // Marcar como iniciado localmente (protección contra realtime)
+    localStartRef.current[room.id] = serverStartMs;
+
+    // flushSync fuerza la actualización de estado SÍNCRONA antes de continuar
+    flushSync(() => {
+      setCleaningStarts((prev) => ({ ...prev, [room.id]: serverStartMs }));
+      setRooms((prev) =>
+        prev.map((r) =>
+          r.id === room.id ? { ...r, status: 'En Limpieza' } : r
+        )
+      );
+      if (currentUserId) {
+        setOwners((prev) => ({ ...prev, [room.id]: currentUserId }));
+      }
+    });
+
+    // 1. Cambiar el estado de la habitación en BD a 'En Limpieza'
+    // IMPORTANTE: Al cambiar la habitación a 'Sucia' previamente o cambiar su estado, 
+    // el trigger de la BD (trigger_ciclos_rooms) es el que calcula correctamente el 'estado_origen'.
+    const { error: roomError } = await supabase
+      .from('rooms')
+      .update({ status: 'En Limpieza' })
+      .eq('id', room.id);
+
+    if (roomError) {
+      console.error('Error al iniciar limpieza:', roomError.message);
+      // Revertir tiempo optimista
+      flushSync(() => {
+        setCleaningStarts((prev) => {
+          const next = { ...prev };
+          delete next[room.id];
+          return next;
+        });
+        setRooms((prev) =>
+          prev.map((r) =>
+            r.id === room.id ? { ...r, status: room.status } : r
+          )
+        );
+        setOwners((prev) => {
+          const next = { ...prev };
+          delete next[room.id];
+          return next;
+        });
+      });
+      delete localStartRef.current[room.id];
+      alert(`No se pudo iniciar la limpieza: ${roomError.message}`);
+      return;
+    }
+
+    // 2. Actualizar el ciclo abierto existente asignándole el usuario y el inicio, 
+    // PERO SIN SOBRESCRIBIR el 'estado_origen' que ya creó el trigger correctamente.
+    const { data: existingCiclo, error: findError } = await supabase
+      .from('ciclos_limpieza')
+      .select('id')
+      .eq('habitacion_id', room.id)
+      .is('finalizado_at', null)
+      .maybeSingle();
+
+    if (findError) {
+      console.error('Error al buscar ciclo existente:', findError.message);
+    }
+
+    let cicloError: Error | null = null;
+
+    if (existingCiclo) {
+      const { error: updateError } = await supabase
+        .from('ciclos_limpieza')
+        .update({
+          usuario_id: currentUserId,
+          iniciado_at: serverStartIso,
+        })
+        .eq('id', existingCiclo.id);
+      cicloError = updateError;
+    } else {
+      // Si por algo no existía el ciclo previo, lo creamos
+      const { error: insertError } = await supabase
+        .from('ciclos_limpieza')
+        .insert({
+          habitacion_id: room.id,
+          hotel_id: room.hotel_id,
+          usuario_id: currentUserId,
+          estado_origen: room.status, // Respeta el estado previo de la habitación
+          sucia_at: serverStartIso,
+          iniciado_at: serverStartIso,
+        });
+      cicloError = insertError;
+    }
+
+    if (cicloError) {
+      console.error('Error al actualizar ciclo:', cicloError.message);
+    }
+
+    setTimeout(() => delete localStartRef.current[room.id], 3000);
+  };
+
+  // ---- Completar limpieza: registra duración real y cumplimiento de tiempo límite ----
+  const getRoomType = (room: Room): string => room.room_type_config?.room_type || 'Estándar';
+  const getRoomZone = (room: Room): string => room.zonas?.nombre || 'Piso 1';
+  const getTypeConfig = (room: Room) => typeConfigs[getRoomType(room)];
+
+  const handleFinishCleaning = async (room: Room) => {
+    const currentServerMs = Date.now() + serverOffset;
+    const durationMs = getElapsed(room.id);
+    const durationMin = Math.round(durationMs / 60000);
+
+    const cfg = getTypeConfig(room);
+    const slaMin = cfg?.sla_min ?? 45;
+    const cumplioSla = durationMin <= slaMin;
+    const minutosExcedidos = Math.max(0, durationMin - slaMin);
+
+    // 1. Consultar el estado_origen real del ciclo activo antes de cerrar
+    const { data: cicloActivo } = await supabase
+      .from('ciclos_limpieza')
+      .select('id, estado_origen')
+      .eq('habitacion_id', room.id)
+      .is('finalizado_at', null)
+      .maybeSingle();
+
+    const estadoOrigen = (cicloActivo?.estado_origen || '').toLowerCase();
+
+    // 2. Lógica clara: 
+    // - Si el origen ES EXPLICITAMENTE un check-out, la dejamos 'Disponible'.
+    // - Si vino de una habitación ocupada (limpieza de estancia), debe volver a 'Ocupada'.
+    let nuevoEstado = 'Ocupada'; // Por defecto, si es limpieza de estancia, regresa a ocupada
+    
+    if (estadoOrigen.includes('check-out') || estadoOrigen === 'checkout') {
+      nuevoEstado = 'Disponible';
+    } else {
+      nuevoEstado = 'Ocupada';
+    }
+
+    // 3. Limpieza inmediata del timer y estado optimista con el nuevo estado calculado
+    flushSync(() => {
+      setRooms((prev) =>
+        prev.map((r) =>
+          r.id === room.id ? { ...r, status: nuevoEstado } : r
+        )
+      );
+      setOwners((prev) => {
+        const next = { ...prev };
+        delete next[room.id];
+        return next;
+      });
+      setCleaningStarts((prev) => {
+        const next = { ...prev };
+        delete next[room.id];
+        return next;
+      });
+    });
+
+    const finalizadoAtIso = new Date(serverNow).toISOString();
+
+    // 4. Actualizar la habitación en la BD con el estado correcto y cerrar el ciclo
+    const [roomRes, cicloRes] = await Promise.all([
+      supabase
+        .from('rooms')
+        .update({ status: nuevoEstado })
+        .eq('id', room.id),
+      supabase
+        .from('ciclos_limpieza')
+        .update({
+          finalizado_at: finalizadoAtIso,
+          duracion_min: durationMin,
+          cumplio_sla: cumplioSla,
+          minutos_excedidos: minutosExcedidos,
+        })
+        .eq('habitacion_id', room.id)
+        .is('finalizado_at', null),
+    ]);
+
+    const roomError = roomRes.error;
+    const cicloError = cicloRes.error;
+
+    if (roomError) {
+      console.error('Error al actualizar habitación:', roomError.message);
+      alert(`No se pudo cambiar el estado: ${roomError.message}`);
+      flushSync(() => {
+        setRooms((prev) => prev.map((r) => (r.id === room.id ? { ...room } : r)));
+        if (currentUserId) {
+          setOwners((prev) => ({ ...prev, [room.id]: currentUserId }));
+        }
+      });
+      return;
+    }
+
+    if (cicloError) {
+      console.error('Error al cerrar ciclo de limpieza:', cicloError.message);
+    }
 
     setToastMessage(
-      `Habitación ${room.room_number} completada en ${formatDuration(durationMs)} ${
-        cumplioSla ? '· Tiempo límite cumplido' : '· Superó el tiempo límite'
-      }`
+      `Habitación ${room.room_number} completada y cambiada a ${nuevoEstado} (${formatDuration(durationMs)})`
     );
     setTimeout(() => setToastMessage(null), 3500);
   };
@@ -268,9 +627,9 @@ export default function LimpiezaMobilePage() {
     const webhookUrl = process.env.NEXT_PUBLIC_N8N_WEBHOOK_URL || '';
     if (!webhookUrl) return;
 
-    const cfg = typeConfigs[room.room_type || ''];
+    const cfg = getTypeConfig(room);
     const slaMin = cfg?.sla_min ?? 45;
-    const elapsedMin = Math.floor(getElapsed(room.cleaning_started_at) / 60000);
+    const elapsedMin = Math.floor(getElapsed(room.id) / 60000);
 
     try {
       await fetch(webhookUrl, {
@@ -280,8 +639,8 @@ export default function LimpiezaMobilePage() {
           evento: 'sla_violacion',
           hotel_id: room.hotel_id,
           habitacion: room.room_number,
-          zona: room.zone || '',
-          room_type: room.room_type || 'Estándar',
+          zona: getRoomZone(room),
+          room_type: getRoomType(room),
           sla_min: slaMin,
           minutos_transcurridos: elapsedMin,
           minutos_excedidos: Math.max(0, elapsedMin - slaMin),
@@ -294,20 +653,14 @@ export default function LimpiezaMobilePage() {
     }
   };
 
-  // Helper para normalizar comparaciones de estado
-  const isInProgress = (status: string) => {
-    const st = (status || '').toLowerCase();
-    return st === 'en limpieza' || st === 'in progress';
-  };
-
   // Al pasar el tiempo límite de una habitación en progreso, notifica a n8n
   useEffect(() => {
     rooms.forEach((room) => {
-      if (!isInProgress(room.status) || !room.cleaning_started_at) return;
-      const cfg = typeConfigs[room.room_type || ''];
+      if (!isInProgress(room.status) || !getCleaningStart(room.id)) return;
+      const cfg = getTypeConfig(room);
       const slaMs = (cfg?.sla_min ?? 45) * 60000;
 
-      if (getElapsed(room.cleaning_started_at) > slaMs) {
+      if (getElapsed(room.id) > slaMs) {
         if (!slaNotifiedRef.current.has(room.id)) {
           slaNotifiedRef.current.add(room.id);
           sendSlaWebhook(room);
@@ -315,33 +668,30 @@ export default function LimpiezaMobilePage() {
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [now]);
+  }, [serverNow]);
 
-  // Marca una notificación como leída y la quita del panel
-  const handleDismissNotificacion = async (id: string) => {
-    setNotificaciones((prev) => prev.filter((n) => n.id !== id));
-    await supabase.from('notificaciones').update({ leida: true }).eq('id', id);
-  };
-
-  // Helper para normalizar comparaciones de estado
-  const isSucia = (status: string) => {
-    const st = (status || '').toLowerCase();
-    return st === 'sucia' || st === 'dirty';
-  };
-
-  // Filtrado operativo
-  const visibleRooms = rooms.filter((room) => isSucia(room.status) || isInProgress(room.status));
+  // Filtrado operativo:
+  // - La camarera ve las habitaciones "Sucia" disponibles.
+  // - Solo ve su propia habitación "En Limpieza" (por usuario_id en el historial).
+  // - NO ve las habitaciones que atienden otras compañeras.
+  const visibleRooms = rooms.filter((room) => {
+    if (isSucia(room.status)) return true;
+    if (isInProgress(room.status)) {
+      return isLimpiezaRole ? owners[room.id] === currentUserId : true;
+    }
+    return false;
+  });
 
   const filteredRooms = visibleRooms.filter((room) => {
-    if (selectedZone && room.zone !== selectedZone) return false;
+    if (selectedZone && getRoomZone(room) !== selectedZone) return false;
     if (prioritariasOnly) {
       // Habitaciones marcadas como prioritarias desde Recepción (sucias o en proceso)
       if (room.is_priority) return true;
       // Además, limpiezas en curso que ya superaron el tiempo estándar
-      if (room.cleaning_started_at) {
-        const cfg = typeConfigs[room.room_type || ''];
+      if (getCleaningStart(room.id)) {
+        const cfg = getTypeConfig(room);
         const stdMs = (cfg?.tiempo_estandar_min ?? 30) * 60000;
-        return getElapsed(room.cleaning_started_at) > stdMs;
+        return getElapsed(room.id) > stdMs;
       }
       return false;
     }
@@ -358,28 +708,6 @@ export default function LimpiezaMobilePage() {
 
   return (
     <div className="p-4 space-y-4">
-      {/* NOTIFICACIONES DEL PANEL (n8n) */}
-      {notificaciones.length > 0 && (
-        <section className="space-y-2">
-          {notificaciones.map((n) => (
-            <div key={n.id} className="bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 rounded-xl p-3 flex items-start gap-2 shadow-sm animate-in fade-in slide-in-from-top-2 duration-200">
-              <BellRing className="w-4 h-4 text-rose-500 mt-0.5 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-bold text-rose-600 dark:text-rose-400">{n.titulo}</p>
-                <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-snug">{n.mensaje}</p>
-              </div>
-              <button
-                onClick={() => handleDismissNotificacion(n.id)}
-                className="text-slate-400 hover:text-rose-500 transition-colors p-0.5 shrink-0"
-                title="Marcar como leída"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ))}
-        </section>
-      )}
-
       {/* MÉTRICAS */}
       <section className="grid grid-cols-3 gap-2">
         <div className="bg-white dark:bg-[#131927] p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-center shadow-sm">
@@ -440,6 +768,17 @@ export default function LimpiezaMobilePage() {
         </button>
       </section>
 
+      {/* AVISO TAREA ÚNICA ("UNA A LA VEZ") */}
+      {isLimpiezaRole && hasActiveTask && currentTaskRoom && (
+        <section className="bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/50 text-indigo-700 dark:text-indigo-300 rounded-xl p-3 text-xs font-semibold flex items-center gap-2 shadow-sm">
+          <TriangleAlert className="w-4 h-4 shrink-0" />
+          <span>
+            Limpieza en curso: Hab. {currentTaskRoom.room_number}. Finalízala antes de iniciar otra
+            tarea.
+          </span>
+        </section>
+      )}
+
       {/* LISTA DE HABITACIONES */}
       <main className="space-y-3">
         {filteredRooms.length === 0 ? (
@@ -448,10 +787,9 @@ export default function LimpiezaMobilePage() {
           </div>
         ) : (
           filteredRooms.map((room) => {
-            const cfg = typeConfigs[room.room_type || ''];
+            const cfg = getTypeConfig(room);
             const inProgress = isInProgress(room.status);
-            const startedAt = room.cleaning_started_at;
-            const elapsed = inProgress && startedAt ? getElapsed(startedAt) : 0;
+            const elapsed = inProgress ? getElapsed(room.id) : 0;
             const stdMs = (cfg?.tiempo_estandar_min ?? 30) * 60000;
             const slaMs = (cfg?.sla_min ?? 45) * 60000;
             const overSla = elapsed > slaMs;
@@ -466,7 +804,7 @@ export default function LimpiezaMobilePage() {
               : overStd
                 ? 'bg-amber-500'
                 : 'bg-emerald-500';
-            const progressPct = Math.min(100, (elapsed / stdMs) * 100);
+            const progressPct = inProgress && stdMs > 0 ? Math.min(100, (elapsed / stdMs) * 100) : 0;
 
             return (
               <div
@@ -480,7 +818,7 @@ export default function LimpiezaMobilePage() {
                 <div className="flex justify-between items-start mb-2">
                   <div>
                     <span className="text-2xl font-black text-slate-900 dark:text-white">{room.room_number}</span>
-                    <span className="ml-2 text-xs text-slate-500">{room.room_type || 'Estándar'} • {room.zone || 'Piso 1'}</span>
+                    <span className="ml-2 text-xs text-slate-500">{getRoomType(room)} • {getRoomZone(room)}</span>
                   </div>
                   <div className="flex items-center gap-1.5">
                     {room.is_priority && (
@@ -537,7 +875,12 @@ export default function LimpiezaMobilePage() {
                   {isSucia(room.status) && (
                     <button
                       onClick={() => handleStartCleaning(room)}
-                      className="w-full h-12 bg-indigo-600 text-white font-bold rounded-xl flex items-center justify-center gap-2 text-sm active:scale-95 transition-transform"
+                      disabled={isLimpiezaRole && hasActiveTask}
+                      className={`w-full h-12 font-bold rounded-xl flex items-center justify-center gap-2 text-sm transition-all ${
+                        isLimpiezaRole && hasActiveTask
+                          ? 'bg-slate-200 dark:bg-slate-700 text-slate-400 dark:text-slate-500 cursor-not-allowed'
+                          : 'bg-indigo-600 text-white active:scale-95'
+                      }`}
                     >
                       <Clock className="w-4 h-4" /> Iniciar Limpieza
                     </button>

@@ -19,14 +19,14 @@ import {
   Building,
   LogOut,
   X,
-  Power
+  Power,
+  Menu
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import { TipoPromedioChart, PersonalChart, BAR_COLORS } from './charts';
+import { TipoPromedioChart, PersonalChart, SlaBreachChart, BAR_COLORS } from './charts';
 import TiemposConfig from './tiempos-config';
 
-// Tipos de habitación disponibles para asignar a un lote
-const ROOM_TYPES = ['Estándar', 'Individual', 'Doble', 'Matrimonial', 'Suite', 'Familiar', 'Deluxe', 'Presidencial'];
+
 
 // Límite de habitaciones por lote para evitar creación masiva accidental
 const MAX_ROOMS_PER_BATCH = 200;
@@ -100,12 +100,20 @@ interface UsuarioData {
   activo?: boolean | null;
 }
 
+interface RoomTypeConfig {
+  id: string;
+  room_type: string;
+  tiempo_estandar_min: number;
+  sla_min: number;
+}
+
 interface HabitacionData {
   id: string;
   room_number?: string | null;
-  room_type?: string | null;
-  zone?: string | null;
+  tipo_habitacion_id?: string | null;
+  room_type_config?: RoomTypeConfig | null;
   zona_id?: string | null;
+  zonas?: { nombre: string } | null;
   status?: string | null;
 }
 
@@ -129,12 +137,14 @@ interface MetricDetalle {
   limpiezas: number;
   suma_duracion_min: number;
   cumplidas: number;
+  suma_exceso_min?: number;
 }
 
 interface AnalyticsData {
   porTipo: { tipo: string; promedio: number; limpiezas: number; cumplidas: number; slaPct: number }[];
   porZona: { zona: string; promedio: number; limpiezas: number; cumplidas: number; slaPct: number }[];
-  porPersonal: { id: string; nombre: string; promedio: number; limpiezas: number; cumplidas: number; slaPct: number }[];
+  porPersonal: { id: string; nombre: string; promedio: number; limpiezas: number; cumplidas: number; slaPct: number; excesoMin: number }[];
+  porPersonalSlaBreach: { id: string; nombre: string; excesoMin: number; limpiezas: number; retrasadas: number }[];
   totalLimpiezas: number;
 }
 
@@ -163,6 +173,7 @@ function buildMetrics(
     limpiezas: d.limpiezas,
     cumplidas: d.cumplidas,
     slaPct: d.limpiezas ? Math.round((d.cumplidas / d.limpiezas) * 100) : 0,
+    excesoMin: d.suma_exceso_min ?? 0,
   });
 
   const porTipo = detalle
@@ -178,25 +189,90 @@ function buildMetrics(
   const porPersonal = detalle
     .filter((d) => d.dimension === 'personal')
     .map((d) => ({ id: d.clave, nombre: d.nombre || 'Personal', ...toRow(d) }))
-    .sort((a, b) => b.limpiezas - a.limpiezas);
+    .sort((a, b) => b.limpiezas - a.limpiezas) as { id: string; nombre: string; promedio: number; limpiezas: number; cumplidas: number; slaPct: number; excesoMin: number }[];
+
+  // DEBUG
+  console.log('DEBUG: porPersonal after buildMetrics:', porPersonal);
+  console.log('DEBUG: porPersonalSlaBreach:', porPersonal.map(p => ({ nombre: p.nombre, excesoMin: p.excesoMin })));
+
+  const porPersonalSlaBreach = porPersonal
+    .map((p) => ({
+      id: p.id,
+      nombre: p.nombre,
+      excesoMin: p.excesoMin,
+      limpiezas: p.limpiezas,
+      retrasadas: p.limpiezas - p.cumplidas,
+    }))
+    .sort((a, b) => b.excesoMin - a.excesoMin);
+
+  const analytics: AnalyticsData = {
+      porTipo,
+      porZona,
+      porPersonal,
+      porPersonalSlaBreach,
+      totalLimpiezas,
+    };
 
   return {
     kpis: {
       tiempoPromedio,
-      habitacionesLimpias: `${roomsRows.filter((h) => (h.status || '').toLowerCase() === 'limpia/lista').length} / ${roomsRows.length}`,
+      // Una habitación cuenta como "limpia" si NO está sucia (ni en limpieza).
+      // Así las habitaciones Disponibles/Ocupadas/Limpias cuentan como limpias.
+      habitacionesLimpias: `${roomsRows.filter((h) => {
+        const s = (h.status || '').toLowerCase();
+        return s !== 'sucia' && s !== 'en limpieza';
+      }).length} / ${roomsRows.length}`,
       alertasSla: `${slaRetrasadas} / ${slaCumplidas}`,
       personalActivo: `${usersRows.filter((u) => u.activo !== false).length} Agentes`,
     },
-    analytics: { porTipo, porZona, porPersonal, totalLimpiezas },
+    analytics,
   };
 }
 
 export default function AdminDashboardPage() {
   const router = useRouter();
-  // Sección activa controlada por el menú lateral
-  const [activeSection, setActiveSection] = useState<'dashboard' | 'parametrica' | 'usuarios'>('dashboard');
-  // Pestaña interna (para la sección paramétrica / usuarios)
-  const [activeTab, setActiveTab] = useState<'zonas' | 'habitaciones' | 'tiempos' | 'usuarios'>('habitaciones');
+  // Sección activa controlada por el menú lateral. Se inicializa de forma perezosa desde la URL
+  // (?seccion=) para que el ítem iluminado del sidebar siempre coincida con la vista (sin efecto,
+  // lo que evita rends en cascada y pasa react-hooks/set-state-in-effect).
+  const [activeSection, setActiveSection] = useState<'dashboard' | 'parametrica' | 'usuarios'>(() => {
+    if (typeof window === 'undefined') return 'dashboard';
+    const s = new URLSearchParams(window.location.search).get('seccion');
+    return s === 'parametrica' || s === 'usuarios' ? s : 'dashboard';
+  });
+  // Pestaña interna de la sección paramétrica / usuarios, inicializada también desde la URL (?tab=).
+  const [activeTab, setActiveTab] = useState<'zonas' | 'habitaciones' | 'tiempos' | 'usuarios'>(() => {
+    if (typeof window === 'undefined') return 'habitaciones';
+    const t = new URLSearchParams(window.location.search).get('tab');
+    return t === 'zonas' || t === 'habitaciones' || t === 'tiempos' || t === 'usuarios' ? t : 'habitaciones';
+  });
+
+  // Navegación atómica: actualiza estado + URL (?seccion= y ?tab=) a la vez. Los botones del
+  // sidebar y las pestañas leen estos estados para que el resaltado siga siempre a la vista.
+  const navigate = useCallback((section: 'dashboard' | 'parametrica' | 'usuarios', tab: 'zonas' | 'habitaciones' | 'tiempos' | 'usuarios') => {
+    setActiveSection(section);
+    setActiveTab(tab);
+    router.replace(`?seccion=${section}&tab=${tab}`, { scroll: false });
+  }, [router]);
+
+  // Responsive sidebar state
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    // Solo lectura inicial del lado del cliente (evita usar useSearchParams y su Suspense en build estático)
+    const params = new URLSearchParams(window.location.search);
+    const seccion = params.get('seccion');
+    const tab = params.get('tab');
+    if (seccion === 'parametrica' || seccion === 'usuarios') {
+      setActiveSection(seccion);
+    }
+    if (tab === 'zonas' || tab === 'habitaciones' || tab === 'tiempos' || tab === 'usuarios') {
+      setActiveTab(tab);
+    }
+    // Close sidebar on mobile when navigating
+    if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+      setSidebarOpen(false);
+    }
+  }, []);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   
@@ -239,12 +315,14 @@ export default function AdminDashboardPage() {
   const [hotelInfo, setHotelInfo] = useState<{ name?: string } | null>(null);
   const [adminProfile, setAdminProfile] = useState<{ nombre?: string; role?: string } | null>(null);
   const [hotelId, setHotelId] = useState<string | null>(null);
+  const [roomTypes, setRoomTypes] = useState<RoomTypeConfig[]>([]);
 
   // Desglose analítico de limpiezas (métricas de tiempos por tipo, zona y personal de limpieza)
-  const [analytics, setAnalytics] = useState({
-    porTipo: [] as { tipo: string; promedio: number; limpiezas: number; cumplidas: number; slaPct: number }[],
-    porZona: [] as { zona: string; promedio: number; limpiezas: number; cumplidas: number; slaPct: number }[],
-    porPersonal: [] as { id: string; nombre: string; promedio: number; limpiezas: number; cumplidas: number; slaPct: number }[],
+  const [analytics, setAnalytics] = useState<AnalyticsData>({
+    porTipo: [],
+    porZona: [],
+    porPersonal: [],
+    porPersonalSlaBreach: [],
     totalLimpiezas: 0,
   });
 
@@ -278,14 +356,20 @@ export default function AdminDashboardPage() {
 
     // 3. Datos operativos filtrados por el hotel del administrador
     let userQuery = supabase.from('profiles').select('*');
-    let habQuery = supabase.from('rooms').select('*');
+    let habQuery = supabase
+      .from('rooms')
+      .select(`
+        *,
+        room_type_config:tipo_habitacion_id ( id, room_type, tiempo_estandar_min, sla_min ),
+        zonas:zona_id ( nombre )
+      `);
     let zonaQuery = supabase.from('zonas').select('*');
     let metQuery = supabase
       .from('metricas_limpieza')
       .select('total_limpiezas, suma_duracion_min, sla_cumplidas, sla_retrasadas');
     let detQuery = supabase
       .from('metricas_limpieza_detalle')
-      .select('dimension, clave, nombre, limpiezas, suma_duracion_min, cumplidas');
+      .select('dimension, clave, nombre, limpiezas, suma_duracion_min, cumplidas, suma_exceso_min');
 
     if (adminHotelId) {
       setHotelId(adminHotelId);
@@ -294,6 +378,16 @@ export default function AdminDashboardPage() {
       zonaQuery = zonaQuery.eq('hotel_id', adminHotelId);
       metQuery = metQuery.eq('hotel_id', adminHotelId);
       detQuery = detQuery.eq('hotel_id', adminHotelId);
+
+      // Fetch room types for this hotel (with UUID ids for the modal select)
+      const { data: roomTypeData } = await supabase
+        .from('room_type_config')
+        .select('id, room_type, tiempo_estandar_min, sla_min')
+        .eq('hotel_id', adminHotelId)
+        .order('room_type', { ascending: true });
+      if (roomTypeData) {
+        setRoomTypes(roomTypeData);
+      }
     }
 
     const { data: userData } = await userQuery;
@@ -336,8 +430,13 @@ export default function AdminDashboardPage() {
       .maybeSingle();
     const { data: detData } = await supabase
       .from('metricas_limpieza_detalle')
-      .select('dimension, clave, nombre, limpiezas, suma_duracion_min, cumplidas')
+      .select('dimension, clave, nombre, limpiezas, suma_duracion_min, cumplidas, suma_exceso_min')
       .eq('hotel_id', hotelId);
+
+    // DEBUG: Log the raw data
+    console.log('DEBUG: metricas_limpieza_detalle raw data:', detData);
+    console.log('DEBUG: personal dimension data:', detData?.filter(d => d.dimension === 'personal'));
+    console.log('DEBUG: suma_exceso_min values:', detData?.filter(d => d.dimension === 'personal').map(d => ({ clave: d.clave, nombre: d.nombre, suma_exceso_min: d.suma_exceso_min })));
     const { data: roomsData } = await supabase
       .from('rooms')
       .select('status')
@@ -362,7 +461,8 @@ export default function AdminDashboardPage() {
     if (!hotelId) return;
 
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const scheduleRefresh = () => {
+    const scheduleRefresh = (payload: any) => {
+      console.log('[Admin Realtime] Event received:', payload.eventType, payload.table, payload);
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         refreshLiveMetrics();
@@ -386,7 +486,14 @@ export default function AdminDashboardPage() {
         { event: '*', schema: 'public', table: 'rooms', filter: `hotel_id=eq.${hotelId}` },
         scheduleRefresh
       )
-      .subscribe();
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'ciclos_limpieza', filter: `hotel_id=eq.${hotelId}` },
+        scheduleRefresh
+      )
+      .subscribe((status, err) => {
+        console.log('[Admin Realtime] Subscription status:', status, err);
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -627,12 +734,6 @@ export default function AdminDashboardPage() {
       if (error) {
         alert('Error: ' + error.message);
       } else {
-        // Mantener el campo denormalizado "zone" de las habitaciones sincronizado
-        await supabase
-          .from('rooms')
-          .update({ zone: zonaEditName.trim() })
-          .eq('zona_id', zonaEditId);
-
         alert('Piso actualizado correctamente.');
         setZonaEditId(null);
         setZonaEditName('');
@@ -674,6 +775,16 @@ export default function AdminDashboardPage() {
       const zonaSeleccionada = zonas.find(z => z.id === selectedZonaId);
       const zonaNombre = zonaSeleccionada ? zonaSeleccionada.nombre : '';
 
+      // Obtener el UUID del tipo de habitación seleccionado
+      const tipoSeleccionado = roomTypes.find(rt => rt.room_type === roomType);
+      const tipoHabitacionId = tipoSeleccionado?.id;
+
+      if (!tipoHabitacionId) {
+        alert('Tipo de habitación no válido.');
+        setSubmitting(false);
+        return;
+      }
+
       // Omitir números que ya existan para evitar duplicados
       const existentes = new Set(habitaciones.map((h) => String(h.room_number)));
       const nuevos = numeros.filter(n => !existentes.has(n));
@@ -689,8 +800,7 @@ export default function AdminDashboardPage() {
         room_number: numero,
         hotel_id: profileData.hotel_id,
         zona_id: selectedZonaId,
-        zone: zonaNombre,
-        room_type: roomType,
+        tipo_habitacion_id: tipoHabitacionId,
         status: 'Disponible'
       }));
 
@@ -762,8 +872,19 @@ export default function AdminDashboardPage() {
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-[#0b0f19] text-slate-900 dark:text-slate-200 flex font-sans transition-colors duration-300">
       
+      {/* Mobile sidebar backdrop */}
+      {sidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       {/* SIDEBAR */}
-      <aside className="w-[260px] bg-white dark:bg-[#0b0f19] border-r border-slate-200 dark:border-slate-800/80 flex flex-col justify-between p-5 select-none shrink-0">
+      <aside className={`fixed lg:static inset-y-0 left-0 z-50 w-[260px] bg-white dark:bg-[#0b0f19] border-r border-slate-200 dark:border-slate-800/80 flex flex-col justify-between p-5 select-none shrink-0 transition-transform duration-300 ease-in-out ${
+        sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+      }`}>
         <div>
           <div className="flex items-center gap-3 mb-8 px-2">
             <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-500/30 text-white font-bold">
@@ -779,7 +900,7 @@ export default function AdminDashboardPage() {
           
           <nav className="space-y-1">
             <button 
-              onClick={() => setActiveSection('dashboard')}
+              onClick={() => { setActiveSection('dashboard'); setSidebarOpen(false); }}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium transition-colors ${activeSection === 'dashboard' ? 'bg-indigo-600/10 text-indigo-600 dark:text-indigo-400 font-semibold' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/50'}`}
             >
               <LayoutDashboard className="w-4 h-4" />
@@ -787,7 +908,7 @@ export default function AdminDashboardPage() {
             </button>
 
             <button 
-              onClick={() => { setActiveSection('parametrica'); setActiveTab('habitaciones'); }}
+              onClick={() => { navigate('parametrica', 'habitaciones'); setSidebarOpen(false); }}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium transition-colors ${activeSection === 'parametrica' ? 'bg-indigo-600/10 text-indigo-600 dark:text-indigo-400 font-semibold' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/50'}`}
             >
               <Sliders className="w-4 h-4" />
@@ -795,7 +916,7 @@ export default function AdminDashboardPage() {
             </button>
 
             <button 
-              onClick={() => { setActiveSection('usuarios'); setActiveTab('usuarios'); }}
+              onClick={() => { navigate('usuarios', 'usuarios'); setSidebarOpen(false); }}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-medium transition-colors ${activeSection === 'usuarios' ? 'bg-indigo-600/10 text-indigo-600 dark:text-indigo-400 font-semibold' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/50'}`}
             >
               <Users className="w-4 h-4" />
@@ -828,15 +949,25 @@ export default function AdminDashboardPage() {
       </aside>
 
       {/* MAIN CONTENT */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        <header className="h-20 border-b border-slate-200 dark:border-slate-800/80 px-8 flex items-center justify-between bg-white/50 dark:bg-[#0b0f19]/50 backdrop-blur-md sticky top-0 z-10">
-          <div>
-            <h2 className="text-lg font-bold text-slate-900 dark:text-white">Panel de Administración General</h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400">Monitoreo operativo, control de personal y parámetros del hotel.</p>
+      <main className="flex-1 flex flex-col min-w-0 overflow-y-auto lg:ml-0">
+        <header className="h-20 border-b border-slate-200 dark:border-slate-800/80 px-4 lg:px-8 flex items-center justify-between bg-white/50 dark:bg-[#0b0f19]/50 backdrop-blur-md sticky top-0 z-10">
+          <div className="flex items-center gap-3">
+            {/* Mobile menu button */}
+            <button 
+              className="lg:hidden p-2 rounded-xl bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 text-slate-500 hover:text-indigo-500 transition-colors shadow-sm"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="Abrir menú"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div>
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white">Panel de Administración General</h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Monitoreo operativo, control de personal y parámetros del hotel.</p>
+            </div>
           </div>
 
           <div className="flex items-center gap-3">
-            <div className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 px-3.5 py-2 rounded-xl text-xs font-medium flex items-center gap-2 shadow-sm">
+            <div className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 px-3.5 py-2 rounded-xl text-xs font-medium flex items-center gap-2 shadow-sm hidden sm:flex">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               <span>{hotelInfo?.name || 'Hotel no configurado'}</span>
             </div>
@@ -846,7 +977,7 @@ export default function AdminDashboardPage() {
           </div>
         </header>
 
-        <div className="p-8 space-y-6">
+        <div className="p-4 lg:p-8 space-y-6">
           
           {/* VISTA 1: DASHBOARD GERENCIAL */}
           {activeSection === 'dashboard' && (
@@ -971,6 +1102,33 @@ export default function AdminDashboardPage() {
                         {analytics.porPersonal.map((c) => (
                           <span key={c.id} className="text-[10px] text-slate-500 flex items-center gap-1">
                             {c.nombre}: {c.promedio} min · {c.cumplidas}/{c.limpiezas} a tiempo
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Incumplimiento de Tiempo (SLA) por Personal */}
+                <div className="bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800/80 rounded-2xl p-5 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900 dark:text-white">Incumplimiento de Tiempo (SLA)</h3>
+                      <p className="text-[11px] text-slate-500 mt-0.5">Minutos totales excedidos del límite por personal</p>
+                    </div>
+                    <div className="p-2 rounded-xl bg-rose-500/10 text-rose-500"><AlertTriangle className="w-4 h-4" /></div>
+                  </div>
+
+                  {analytics.porPersonalSlaBreach.length === 0 ? (
+                    <p className="text-xs text-slate-400 py-6 text-center">Sin limpiezas registradas todavía.</p>
+                  ) : (
+                    <div>
+                      <SlaBreachChart data={analytics.porPersonalSlaBreach} />
+                      <div className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1">
+                        {analytics.porPersonalSlaBreach.map((p) => (
+                          <span key={p.id} className="text-[10px] text-slate-500 flex items-center gap-1">
+                            <span className="inline-block w-2 h-2 rounded-full bg-rose-500" />
+                            {p.nombre}: {p.excesoMin} min de retraso total
                           </span>
                         ))}
                       </div>
@@ -1163,8 +1321,8 @@ export default function AdminDashboardPage() {
                               {room.status || 'Disponible'}
                             </span>
                           </td>
-                          <td className="py-4 px-4 font-medium text-indigo-500">{room.zone || 'Sin zona'}</td>
-                          <td className="py-4 px-4 text-slate-500 dark:text-slate-400">{room.room_type || 'Estándar'}</td>
+                          <td className="py-4 px-4 font-medium text-indigo-500">{room.zonas?.nombre || 'Sin zona'}</td>
+                          <td className="py-4 px-4 text-slate-500 dark:text-slate-400">{room.room_type_config?.room_type || 'Estándar'}</td>
                         </tr>
                       ))
                     )}
@@ -1390,7 +1548,11 @@ export default function AdminDashboardPage() {
                 <div>
                   <label className="block text-sm font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Tipo de Habitación</label>
                   <select value={roomType} onChange={(e) => setRoomType(e.target.value)} className="w-full bg-slate-50 dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 dark:text-white focus:outline-none focus:border-indigo-500" required>
-                    {ROOM_TYPES.map((t) => (<option key={t} value={t}>{t}</option>))}
+                    {roomTypes.length > 0 ? (
+                      roomTypes.map((t) => (<option key={t.id} value={t.id}>{t.room_type}</option>))
+                    ) : (
+                      <option value="">Sin tipos configurados</option>
+                    )}
                   </select>
                   <p className="text-xs text-slate-400 mt-1">El tipo seleccionado se aplicará a todas las habitaciones del lote.</p>
                 </div>

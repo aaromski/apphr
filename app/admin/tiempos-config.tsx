@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Clock, Plus, Save, Trash2 } from 'lucide-react';
+import { CheckCircle2, Clock, Plus, Save, Trash2, XCircle } from 'lucide-react';
 
 interface Row {
   room_type: string;
@@ -10,14 +10,30 @@ interface Row {
   sla_min: number;
 }
 
+interface Feedback {
+  type: 'ok' | 'error';
+  text: string;
+}
+
 export default function TiemposConfig() {
   const [hotelId, setHotelId] = useState<string | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
   const [tiposHotel, setTiposHotel] = useState<string[]>([]);
   const [nuevoTipo, setNuevoTipo] = useState('');
+  const [nuevoTiempoEstandar, setNuevoTiempoEstandar] = useState(30);
+  const [nuevoSla, setNuevoSla] = useState(45);
+  const [adding, setAdding] = useState(false);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingType, setSavingType] = useState<string | null>(null);
   const [savingAll, setSavingAll] = useState(false);
+
+  const showFeedback = (type: Feedback['type'], text: string) => {
+    setFeedback({ type, text });
+    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = setTimeout(() => setFeedback(null), 3500);
+  };
 
   useEffect(() => {
     const fetchConfig = async () => {
@@ -42,11 +58,11 @@ export default function TiemposConfig() {
       // Solo los tipos de habitación que el hotel ya usa en sus habitaciones
       const { data: roomsData } = await supabase
         .from('rooms')
-        .select('room_type')
+        .select('tipo_habitacion_id, room_type_config:tipo_habitacion_id ( room_type )')
         .eq('hotel_id', profile.hotel_id);
 
       const tipos = Array.from(
-        new Set(((roomsData || []) as { room_type?: string | null }[]).map((r) => (r.room_type || '').trim()).filter(Boolean))
+        new Set(((roomsData || []) as { room_type_config?: { room_type: string }[] | null }[]).map((r) => (r.room_type_config?.[0]?.room_type || '').trim()).filter(Boolean))
       ).sort((a, b) => a.localeCompare(b));
 
       setTiposHotel(tipos);
@@ -81,14 +97,15 @@ export default function TiemposConfig() {
       { onConflict: 'hotel_id,room_type' }
     );
     setSavingType(null);
-    if (error) alert(`No se pudo guardar "${row.room_type}": ${error.message}`);
+    if (error) showFeedback('error', `No se pudo guardar "${row.room_type}": ${error.message}`);
+    else showFeedback('ok', `Tiempos de "${row.room_type}" guardados.`);
   };
 
   const handleSaveAll = async () => {
     if (!hotelId) return;
     const invalid = rows.find((r) => !r.room_type.trim() || r.tiempo_estandar_min < 1 || r.sla_min < 1);
     if (invalid) {
-      alert('Revisa los valores: el tiempo estándar y el tiempo límite deben ser mayores a 0.');
+      showFeedback('error', 'Revisa los valores: el tiempo estándar y el tiempo límite deben ser mayores a 0.');
       return;
     }
     setSavingAll(true);
@@ -103,23 +120,56 @@ export default function TiemposConfig() {
       { onConflict: 'hotel_id,room_type' }
     );
     setSavingAll(false);
-    if (error) alert('No se pudieron guardar los tiempos: ' + error.message);
-    else alert('Tiempos y controles de tiempo actualizados correctamente.');
+    if (error) showFeedback('error', 'No se pudieron guardar los tiempos: ' + error.message);
+    else showFeedback('ok', 'Tiempos y controles de tiempo actualizados correctamente.');
   };
 
   const disponiblesParaAgregar = tiposHotel.filter(
     (t) => !rows.some((r) => r.room_type.toLowerCase() === t.toLowerCase())
   );
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
+    if (!hotelId) return;
     const tipo = nuevoTipo.trim();
-    if (!tipo) return;
-    if (rows.some((r) => r.room_type.toLowerCase() === tipo.toLowerCase())) {
-      alert('Ese tipo de habitación ya está en la lista.');
+    const tiempoEstandar = nuevoTiempoEstandar;
+    const sla = nuevoSla;
+
+    // Validación: campos obligatorios y valores positivos
+    if (!tipo) {
+      showFeedback('error', 'Escribe el nombre del tipo de habitación.');
       return;
     }
-    setRows((prev) => [...prev, { room_type: tipo, tiempo_estandar_min: 30, sla_min: 45 }]);
+    if (tiempoEstandar < 1 || sla < 1) {
+      showFeedback('error', 'El tiempo estándar y el tiempo límite deben ser mayores a 0.');
+      return;
+    }
+    if (rows.some((r) => r.room_type.toLowerCase() === tipo.toLowerCase())) {
+      showFeedback('error', 'Ese tipo de habitación ya está en la lista.');
+      return;
+    }
+
+    setAdding(true);
+    const { error } = await supabase.from('room_type_config').insert({
+      hotel_id: hotelId,
+      room_type: tipo,
+      tiempo_estandar_min: tiempoEstandar,
+      sla_min: sla,
+      updated_at: new Date().toISOString(),
+    });
+    setAdding(false);
+
+    if (error) {
+      showFeedback('error', `No se pudo agregar "${tipo}": ${error.message}`);
+      return;
+    }
+
+    // Actualización instantánea de la lista sin recargar
+    const nuevaFila: Row = { room_type: tipo, tiempo_estandar_min: tiempoEstandar, sla_min: sla };
+    setRows((prev) => [...prev, nuevaFila].sort((a, b) => a.room_type.localeCompare(b.room_type)));
     setNuevoTipo('');
+    setNuevoTiempoEstandar(30);
+    setNuevoSla(45);
+    showFeedback('ok', `Tipo "${tipo}" agregado correctamente.`);
   };
 
   const handleRemove = (roomType: string) => {
@@ -132,6 +182,23 @@ export default function TiemposConfig() {
 
   return (
     <div className="pt-5 space-y-5">
+      {feedback && (
+        <div
+          className={`fixed bottom-4 right-4 z-50 animate-slide-in flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium shadow-lg transition-all ${
+            feedback.type === 'ok'
+              ? 'bg-emerald-500 text-white'
+              : 'bg-rose-500 text-white'
+          }`}
+          role="alert"
+        >
+          {feedback.type === 'ok' ? (
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+          ) : (
+            <XCircle className="w-4 h-4 shrink-0" />
+          )}
+          <span>{feedback.text}</span>
+        </div>
+      )}
       <div className="flex items-start gap-2 bg-indigo-500/5 border border-indigo-500/15 rounded-xl p-3">
         <Clock className="w-4 h-4 text-indigo-500 mt-0.5 shrink-0" />
         <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
@@ -200,7 +267,7 @@ export default function TiemposConfig() {
       </div>
 
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
-        <div className="flex items-center gap-2 flex-1">
+        <div className="flex flex-col sm:flex-row items-center gap-2 flex-1">
           <input
             list="room-type-options"
             type="text"
@@ -212,11 +279,32 @@ export default function TiemposConfig() {
           <datalist id="room-type-options">
             {disponiblesParaAgregar.map((t) => (<option key={t} value={t} />))}
           </datalist>
+          <input
+            type="number"
+            min={1}
+            max={480}
+            value={nuevoTiempoEstandar}
+            onChange={(e) => setNuevoTiempoEstandar(Number(e.target.value) || 0)}
+            placeholder="Estándar (min)"
+            className="w-36 bg-slate-50 dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-xl py-2 px-3.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+            title="Tiempo estándar de limpieza en minutos"
+          />
+          <input
+            type="number"
+            min={1}
+            max={480}
+            value={nuevoSla}
+            onChange={(e) => setNuevoSla(Number(e.target.value) || 0)}
+            placeholder="Límite/SLA (min)"
+            className="w-36 bg-slate-50 dark:bg-[#0b0f19] border border-slate-200 dark:border-slate-800 rounded-xl py-2 px-3.5 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500"
+            title="Tiempo límite/SLA en minutos"
+          />
           <button
             onClick={handleAdd}
-            className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-indigo-500 hover:text-white rounded-xl px-3 py-2 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+            disabled={adding}
+            className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-indigo-500 hover:text-white rounded-xl px-3 py-2 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap disabled:opacity-50"
           >
-            <Plus className="w-3.5 h-3.5" /> Agregar
+            <Plus className="w-3.5 h-3.5" /> {adding ? 'Agregando...' : 'Agregar'}
           </button>
         </div>
         <button

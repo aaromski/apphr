@@ -25,6 +25,15 @@ export interface PersonalDato {
   limpiezas: number;
   cumplidas: number;
   slaPct: number;
+  excesoMin?: number;
+}
+
+export interface SlaBreachDato {
+  id: string;
+  nombre: string;
+  excesoMin: number;
+  limpiezas: number;
+  retrasadas: number;
 }
 
 export const BAR_COLORS = ['#6366f1', '#8b5cf6', '#0ea5e9', '#10b981', '#f59e0b', '#f43f5e', '#14b8a6', '#f97316'];
@@ -63,6 +72,24 @@ export function PersonalChart({ data }: { data: PersonalDato[] }) {
         <YAxis type="category" dataKey="nombre" width={110} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
         <Tooltip cursor={{ fill: 'rgba(59,130,246,0.08)' }} contentStyle={tooltipStyle} />
         <Bar dataKey="promedio" name="Min promedio" fill="#3b82f6" radius={[0, 6, 6, 0]} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+export function SlaBreachChart({ data }: { data: SlaBreachDato[] }) {
+  return (
+    <ResponsiveContainer width="100%" height={240}>
+      <BarChart data={data} layout="vertical" margin={{ top: 0, right: 28, left: 8, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.15} horizontal={false} />
+        <XAxis type="number" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+        <YAxis type="category" dataKey="nombre" width={110} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+        <Tooltip
+          cursor={{ fill: 'rgba(244,63,94,0.08)' }}
+          contentStyle={tooltipStyle}
+          formatter={(value: unknown) => [typeof value === 'number' ? value : 0, 'min excedidos']}
+        />
+        <Bar dataKey="excesoMin" name="Min excedidos" fill="#f43f5e" radius={[0, 6, 6, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );
