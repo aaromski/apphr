@@ -348,10 +348,10 @@ export default function LimpiezaMobilePage() {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'notifications' },
         (payload) => {
-          const newNotif = payload.new as { message: string };
-          if (newNotif && newNotif.message) {
-            triggerNotification(newNotif.message);
-          }
+          const target = newNotif.target_role || 'limpieza';
+            if (target === 'limpieza') {
+              triggerNotification(newNotif.message);
+            }
         }
       )
       .subscribe();
@@ -639,7 +639,7 @@ export default function LimpiezaMobilePage() {
 
       {/* FILTROS DE ZONA + PRIORITARIAS */}
       <section className="flex items-center gap-2">
-        <div className="flex gap-2 overflow-x-auto no-scrollbar flex-1 min-w-0">
+        <div className="flex gap-2 overflow-x-auto no-scrollbar flex-1 min-w-0 pr-4 pb-2">
           <button
             onClick={() => setSelectedZone(null)}
             className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all shrink-0 ${
