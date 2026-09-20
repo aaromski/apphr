@@ -1,11 +1,10 @@
-// app/api/notifications/sla/route.ts
 import { NextResponse } from 'next/server';
+
+export const dynamic = 'force-dynamic';
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    
-    // Extraemos los datos enviados por n8n
     const { hotel_id, room_number, sla_min } = body;
 
     console.log(`⚠️ Alerta de SLA recibida desde n8n para la habitación: ${room_number || 'Desconocida'}`);
@@ -24,7 +23,6 @@ export async function POST(request: Request) {
   }
 }
 
-// Opcional: Para permitir que si abres la URL por error en el navegador no dé 404 feo
 export async function GET() {
   return NextResponse.json({ 
     status: "Active", 
