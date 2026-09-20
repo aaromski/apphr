@@ -24,16 +24,19 @@ export async function POST(request: Request) {
     }
 
     // Insertar la notificación en la base de datos de Supabase incluyendo el user_id
-    const { error } = await supabase.from('notifications').insert([
-      {
-        hotel_id: hotel_id || null,
-        message: textMessage,
-        kind: 'priority',
-        unread: true,
-        target_role: targetRole, // Guardamos a quién va dirigida
-        user_id: user_id || null, // 2. Guardamos el ID del usuario específico (si viene)
-      },
-    ]);
+    // Limpiamos el user_id por si llega como texto "null" o vacío desde n8n
+const cleanUserId = (!user_id || user_id === 'null' || user_id === '') ? null : user_id;
+
+const { error } = await supabase.from('notifications').insert([
+  {
+    hotel_id: hotel_id || null,
+    message: textMessage,
+    kind: 'priority',
+    unread: true,
+    target_role: targetRole,
+    user_id: cleanUserId, // Usamos la variable limpia
+  },
+]);
 
     if (error) {
       console.error('Error al guardar notificación en Supabase:', error);
