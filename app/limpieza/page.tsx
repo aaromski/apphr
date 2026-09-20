@@ -426,6 +426,32 @@ export default function LimpiezaMobilePage() {
       }
     });
 
+    // 1. PRIMERO: Crear/actualizar ciclo con usuario_id e iniciado_at ANTES de cambiar estado
+
+    const { error: cicloError } = await supabase
+      .from('ciclos_limpieza')
+      .upsert({
+        habitacion_id: room.id,
+        hotel_id: room.hotel_id,
+        usuario_id: currentUserId,
+        estado_origen: room.status,
+        sucia_at: serverStartIso,
+        iniciado_at: serverStartIso,
+      }, { onConflict: 'habitacion_id' });
+
+    if (cicloError) {
+      console.error('Error al crear ciclo:', cicloError.message);
+      flushSync(() => {
+        setCleaningStarts((prev) => { const n = { ...prev }; delete n[room.id]; return n; });
+        setRooms((prev) => prev.map((r) => r.id === room.id ? { ...r, status: room.status } : r));
+        setOwners((prev) => { const n = { ...prev }; delete n[room.id]; return n; });
+      });
+      delete localStartRef.current[room.id];
+      alert(`No se pudo iniciar la limpieza: ${cicloError.message}`);
+      return;
+    }
+
+    // 2. LUEGO: Actualizar estado de la habitación (dispara trigger)
     const { error: roomError } = await supabase
       .from('rooms')
       .update({ status: 'En Limpieza' })
@@ -434,55 +460,16 @@ export default function LimpiezaMobilePage() {
     if (roomError) {
       console.error('Error al iniciar limpieza:', roomError.message);
       flushSync(() => {
-        setCleaningStarts((prev) => {
-          const next = { ...prev };
-          delete next[room.id];
-          return next;
-        });
-        setRooms((prev) =>
-          prev.map((r) =>
-            r.id === room.id ? { ...r, status: room.status } : r
-          )
-        );
-        setOwners((prev) => {
-          const next = { ...prev };
-          delete next[room.id];
-          return next;
-        });
+        setCleaningStarts((prev) => { const n = { ...prev }; delete n[room.id]; return n; });
+        setRooms((prev) => prev.map((r) => r.id === room.id ? { ...r, status: room.status } : r));
+        setOwners((prev) => { const n = { ...prev }; delete n[room.id]; return n; });
       });
       delete localStartRef.current[room.id];
       alert(`No se pudo iniciar la limpieza: ${roomError.message}`);
       return;
     }
 
-    const { data: existingCiclo } = await supabase
-      .from('ciclos_limpieza')
-      .select('id')
-      .eq('habitacion_id', room.id)
-      .is('finalizado_at', null)
-      .maybeSingle();
-
-    if (existingCiclo) {
-      await supabase
-        .from('ciclos_limpieza')
-        .update({
-          usuario_id: currentUserId, // Aseguramos enviar el ID actual
-          iniciado_at: serverStartIso,
-        })
-        .eq('id', existingCiclo.id);
-    } else {
-      await supabase
-        .from('ciclos_limpieza')
-        .insert({
-          habitacion_id: room.id,
-          hotel_id: room.hotel_id,
-          usuario_id: currentUserId, // Aseguramos enviar el ID actual
-          estado_origen: room.status,
-          sucia_at: serverStartIso,
-          iniciado_at: serverStartIso,
-        });
-    }
-
+    // Limpiar protección local tras confirmar
     setTimeout(() => delete localStartRef.current[room.id], 3000);
   };
 
