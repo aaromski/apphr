@@ -563,6 +563,7 @@ export default function LimpiezaMobilePage() {
     const cfg = getTypeConfig(room);
     const slaMin = cfg?.sla_min ?? 45;
     const elapsedMin = Math.floor(getElapsed(room.id) / 60000);
+	const assignedUserId = owners[room.id] || currentUserId;
 
     try {
       await fetch(webhookUrl, {
@@ -577,6 +578,7 @@ export default function LimpiezaMobilePage() {
           sla_min: slaMin,
           minutos_transcurridos: elapsedMin,
           minutos_excedidos: Math.max(0, elapsedMin - slaMin),
+user_id: assignedUserId,
           timestamp: new Date().toISOString(),
         }),
         keepalive: true,
