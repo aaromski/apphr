@@ -359,7 +359,7 @@ export default function LimpiezaMobilePage() {
       const target = newNotif.target_role ? newNotif.target_role.toLowerCase().trim() : '';
       
       if (target === 'limpieza') {
-        publishNotification(newNotif.message, newNotif.kind || 'priority');
+        triggerNotification(newNotif.message);
       }
     }
   }
