@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
+import { clearFCMTokenOnSignOut } from '@/lib/push-notifications';
 import {
   LogOut,
   Award,
@@ -39,9 +40,6 @@ interface UserProfile {
 interface CicloLimpieza {
   id: string;
   habitacion_id: string;
-  room_number: string;
-  room_type: string;
-  zone: string | null;
   usuario_id: string | null;
   personal_nombre: string | null;
   estado_origen: string;
@@ -52,7 +50,7 @@ interface CicloLimpieza {
   sla_min: number | null;
   cumplio_sla: boolean | null;
   minutos_excedidos: number | null;
-  rooms?: {
+  habitacion?: {
     room_number: string;
     room_type_config?: { room_type: string } | null;
     zonas?: { nombre: string } | null;
@@ -140,6 +138,8 @@ export default function PerfilPage() {
   }, []);
 
   const handleLogout = async () => {
+    // Clear FCM token before signing out
+    await clearFCMTokenOnSignOut();
     await supabase.auth.signOut();
     router.push('/');
   };
@@ -167,10 +167,10 @@ export default function PerfilPage() {
         sla_min,
         cumplio_sla,
         minutos_excedidos,
-        rooms (
+        habitacion:habitacion_id (
           room_number,
-          room_type_config ( room_type ),
-          zonas ( nombre )
+          room_type_config:tipo_habitacion_id ( room_type ),
+          zonas:zona_id ( nombre )
         )
       `)
       .eq('usuario_id', profile.id)
@@ -308,8 +308,8 @@ export default function PerfilPage() {
   const slaPct = limpiezasHoy ? Math.round((slaCumplidas / limpiezasHoy) * 100) : 0;
 
   const getRoomInfo = (h: CicloLimpieza) => ({
-    room_number: h.rooms?.room_number || '',
-    room_type: h.rooms?.room_type_config?.room_type || 'Estándar',
+    room_number: h.habitacion?.room_number || '',
+    room_type: h.habitacion?.room_type_config?.room_type || 'Estándar',
   });
 
   const abrirDesempeno = () => {

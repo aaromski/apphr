@@ -12,8 +12,8 @@ interface NavLink {
 
 const navLinks: NavLink[] = [
   { label: 'Características', href: '#features' },
-  { label: 'Métricas', href: '#metrics' },
-  { label: 'Precios', href: '#pricing' },
+  { label: 'Arquitectura', href: '#metrics' },
+  { label: 'Documentación', href: '/docs' },
 ];
 
 export function Navbar() {

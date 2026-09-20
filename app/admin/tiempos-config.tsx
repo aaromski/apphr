@@ -2,12 +2,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { CheckCircle2, Clock, Plus, Save, Trash2, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock, Plus, Save, XCircle } from 'lucide-react';
 
 interface Row {
   room_type: string;
   tiempo_estandar_min: number;
   sla_min: number;
+  activo: boolean;
 }
 
 interface Feedback {
@@ -51,7 +52,7 @@ export default function TiemposConfig() {
 
       const { data: cfg } = await supabase
         .from('room_type_config')
-        .select('room_type, tiempo_estandar_min, sla_min')
+        .select('room_type, tiempo_estandar_min, sla_min, activo')
         .eq('hotel_id', profile.hotel_id)
         .order('room_type', { ascending: true });
 
@@ -71,6 +72,7 @@ export default function TiemposConfig() {
           room_type: c.room_type,
           tiempo_estandar_min: c.tiempo_estandar_min ?? 30,
           sla_min: c.sla_min ?? 45,
+          activo: c.activo ?? true,
         }))
       );
       setLoading(false);
@@ -92,6 +94,7 @@ export default function TiemposConfig() {
         room_type: row.room_type,
         tiempo_estandar_min: row.tiempo_estandar_min,
         sla_min: row.sla_min,
+        activo: row.activo,
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'hotel_id,room_type' }
@@ -115,6 +118,7 @@ export default function TiemposConfig() {
         room_type: r.room_type,
         tiempo_estandar_min: r.tiempo_estandar_min,
         sla_min: r.sla_min,
+        activo: r.activo,
         updated_at: new Date().toISOString(),
       })),
       { onConflict: 'hotel_id,room_type' }
@@ -154,6 +158,7 @@ export default function TiemposConfig() {
       room_type: tipo,
       tiempo_estandar_min: tiempoEstandar,
       sla_min: sla,
+      activo: true,
       updated_at: new Date().toISOString(),
     });
     setAdding(false);
@@ -164,7 +169,7 @@ export default function TiemposConfig() {
     }
 
     // Actualización instantánea de la lista sin recargar
-    const nuevaFila: Row = { room_type: tipo, tiempo_estandar_min: tiempoEstandar, sla_min: sla };
+    const nuevaFila: Row = { room_type: tipo, tiempo_estandar_min: tiempoEstandar, sla_min: sla, activo: true };
     setRows((prev) => [...prev, nuevaFila].sort((a, b) => a.room_type.localeCompare(b.room_type)));
     setNuevoTipo('');
     setNuevoTiempoEstandar(30);
@@ -172,8 +177,20 @@ export default function TiemposConfig() {
     showFeedback('ok', `Tipo "${tipo}" agregado correctamente.`);
   };
 
-  const handleRemove = (roomType: string) => {
-    setRows((prev) => prev.filter((r) => r.room_type !== roomType));
+  const toggleActive = async (roomType: string, currentlyActive: boolean) => {
+    if (!hotelId) return;
+    const newActive = !currentlyActive;
+    const { error } = await supabase
+      .from('room_type_config')
+      .update({ activo: newActive, updated_at: new Date().toISOString() })
+      .eq('hotel_id', hotelId)
+      .eq('room_type', roomType);
+    if (error) {
+      showFeedback('error', `No se pudo ${newActive ? 'activar' : 'desactivar'}: ${error.message}`);
+    } else {
+      setRows((prev) => prev.map((r) => (r.room_type === roomType ? { ...r, activo: newActive } : r)));
+      showFeedback('ok', `Tipo ${newActive ? 'activado' : 'desactivado'} correctamente.`);
+    }
   };
 
   if (loading) {
@@ -252,11 +269,23 @@ export default function TiemposConfig() {
                       <Save className="w-3.5 h-3.5" /> {savingType === row.room_type ? 'Guardando...' : 'Guardar'}
                     </button>
                     <button
-                      onClick={() => handleRemove(row.room_type)}
-                      className="px-2.5 py-1 bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500 hover:text-white rounded-lg transition-colors font-medium inline-flex items-center gap-1"
-                      title="Quitar de la lista"
+                      onClick={() => toggleActive(row.room_type, row.activo)}
+                      className={`px-2.5 py-1 rounded-lg transition-colors font-medium inline-flex items-center gap-1 ${
+                        row.activo
+                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500 hover:text-white'
+                          : 'bg-slate-500/10 text-slate-600 dark:text-slate-400 hover:bg-slate-500 hover:text-white'
+                      }`}
+                      title={row.activo ? 'Desactivar' : 'Activar'}
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      {row.activo ? (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Desactivar
+                        </>
+                      ) : (
+                        <>
+                          <XCircle className="w-3.5 h-3.5" /> Activar
+                        </>
+                      )}
                     </button>
                   </td>
                 </tr>

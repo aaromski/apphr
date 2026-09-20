@@ -13,38 +13,33 @@ interface FooterSection {
   links: FooterLink[];
 }
 
-const footerSections: FooterSection[] = [
+const footerSections = [
   {
     title: 'Producto',
     links: [
       { label: 'Características', href: '#features' },
-      { label: 'Precios', href: '#pricing' },
-      { label: 'Integraciones', href: '#integrations' },
-      { label: 'API & Docs', href: '/docs' },
+      { label: 'Arquitectura Técnica', href: '#metrics' },
+      { label: 'Documentación', href: '/docs' },
+      { label: 'API Reference', href: '/docs/api' },
       { label: 'Changelog', href: '/changelog' },
-      { label: 'Roadmap', href: '/roadmap' },
     ],
   },
   {
     title: 'Empresa',
     links: [
       { label: 'Sobre Nosotros', href: '/about' },
-      { label: 'Blog', href: '/blog' },
+      { label: 'Blog Técnico', href: '/blog' },
       { label: 'Carreras', href: '/careers' },
-      { label: 'Prensa', href: '/press' },
       { label: 'Contacto', href: '/contact' },
-      { label: 'Socios', href: '/partners' },
     ],
   },
   {
     title: 'Recursos',
     links: [
       { label: 'Centro de Ayuda', href: '/help' },
-      { label: 'Comunidad', href: '/community' },
-      { label: 'Webinars', href: '/webinars' },
-      { label: 'Casos de Estudio', href: '/case-studies' },
-      { label: 'Plantillas', href: '/templates' },
       { label: 'Estado del Sistema', href: '/status' },
+      { label: 'Seguridad', href: '/security' },
+      { label: 'Comunidad', href: '/community' },
     ],
   },
   {
@@ -54,17 +49,16 @@ const footerSections: FooterSection[] = [
       { label: 'Términos de Servicio', href: '/terms' },
       { label: 'Política de Cookies', href: '/cookies' },
       { label: 'DPA / RGPD', href: '/dpa' },
-      { label: 'Seguridad', href: '/security' },
       { label: 'SLA', href: '/sla' },
     ],
   },
 ];
 
 const socialLinks = [
-  { icon: MessageSquare, label: 'Twitter', href: 'https://twitter.com/apphr' },
-  { icon: GitBranch, label: 'GitHub', href: 'https://github.com/apphr' },
-  { icon: LinkIcon, label: 'LinkedIn', href: 'https://linkedin.com/company/apphr' },
   { icon: Mail, label: 'Email', href: 'mailto:hola@apphr.io' },
+  { icon: GitBranch, label: 'GitHub', href: 'https://github.com/apphr' },
+  { icon: MessageSquare, label: 'Twitter', href: 'https://twitter.com/apphr' },
+  { icon: MessageSquare, label: 'Discord', href: 'https://discord.gg/apphr' },
 ];
 
 export function Footer() {
@@ -82,25 +76,34 @@ export function Footer() {
                 <span className="text-lg font-bold tracking-tight text-slate-900 dark:text-white leading-none">
                   AppHR
                 </span>
-                <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Hotel Management</span>
+                <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Hotel Operations Platform</span>
               </div>
             </Link>
             <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed mb-6">
-              La plataforma de gestión hotelera en tiempo real que sincroniza recepción, limpieza y gerencia.
+              Plataforma de gestión hotelera en tiempo real que sincroniza Recepción, Limpieza y Gerencia.
+              Arquitectura Jamstack/Serverless · Next.js + Supabase · RLS nativo · PWA instalable.
             </p>
             <div className="flex items-center gap-4">
-              {socialLinks.map((social) => (
-                <a
-                  key={social.label}
-                  href={social.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="p-2 rounded-lg bg-slate-100 dark:bg-slate-800/60 text-slate-500 dark:text-slate-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-                  aria-label={social.label}
-                >
-                  <social.icon className="w-5 h-5" />
-                </a>
-              ))}
+              <p className="text-xs text-slate-500 dark:text-slate-400">Conecta con nosotros:</p>
+              <div className="flex items-center gap-4">
+                {[
+                  { icon: Mail, label: 'Email', href: 'mailto:hola@apphr.io' },
+                  { icon: MessageSquare, label: 'Twitter', href: 'https://twitter.com/apphr' },
+                  { icon: GitBranch, label: 'GitHub', href: 'https://github.com/apphr' },
+                  { icon: MessageSquare, label: 'Discord', href: 'https://discord.gg/apphr' },
+                ].map((social) => (
+                  <a
+                    key={social.label}
+                    href={social.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 rounded-lg bg-slate-100 dark:bg-slate-800/60 text-slate-500 dark:text-slate-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                    aria-label={social.label}
+                  >
+                    <social.icon className="w-5 h-5" />
+                  </a>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -136,7 +139,7 @@ export function Footer() {
             <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
               <ShieldCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
               <span className="font-semibold text-slate-700 dark:text-slate-300">AppHR</span>
-              <span>— © 2026 AppHR Technologies. Todos los derechos reservados.</span>
+              <span>— © 2025 AppHR Technologies. Todos los derechos reservados.</span>
             </div>
 
             {/* Compliance badges */}

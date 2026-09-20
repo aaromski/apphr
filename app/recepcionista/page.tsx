@@ -435,11 +435,8 @@ export default function DashboardPage() {
 
   // Envía el evento de Check-Out al webhook de n8n
   const sendCheckoutWebhook = async (room: Room) => {
-    const webhookUrl = process.env.NEXT_PUBLIC_N8N_CHECKOUT_WEBHOOK_URL || process.env.NEXT_PUBLIC_N8N_WEBHOOK_URL || '';
-    if (!webhookUrl) return;
-
     try {
-      await fetch(webhookUrl, {
+      await fetch('/api/webhook/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -449,10 +446,9 @@ export default function DashboardPage() {
           zona: room.zonas?.nombre || '',
           timestamp: new Date().toISOString(),
         }),
-        keepalive: true,
       });
     } catch (err) {
-      console.error('Error al notificar el check-out a n8n:', err);
+      console.error('Error al notificar el check-out:', err);
     }
   };
 
@@ -462,8 +458,8 @@ export default function DashboardPage() {
     if (room.status !== 'Ocupada') return;
 
     const nowIso = new Date().toISOString();
+    console.log("➡️ Enviando Check-Out para la habitación:", room.room_number, "con fecha:", nowIso); // <--- Mensaje de prueba
 
-    // Actualizamos ambas columnas en una sola consulta
     const { error } = await supabase
       .from('rooms')
       .update({ 
@@ -471,6 +467,7 @@ export default function DashboardPage() {
         status: 'Sucia' 
       })
       .eq('id', room.id);
+    
 
     if (error) {
       console.error('Error al registrar check-out:', error.message);

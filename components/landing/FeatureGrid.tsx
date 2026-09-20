@@ -23,17 +23,19 @@ interface Feature {
   bgColor: string;
   borderColor: string;
   highlights: string[];
+  technicalDetails: string;
 }
 
 const features: Feature[] = [
   {
     icon: Sparkles,
     title: 'Sincronización en Tiempo Real',
-    description: 'Actualizaciones instantáneas en todos los dispositivos sin necesidad de recargar. WebSocket nativo con Supabase Realtime para latencia sub-segundo.',
+    description: 'Actualizaciones instantáneas en todos los dispositivos sin recargar. WebSocket nativo con Supabase Realtime para latencia sub-segundo.',
     color: 'from-indigo-500 to-violet-500',
     bgColor: 'bg-indigo-500/10 dark:bg-indigo-950/30',
     borderColor: 'border-indigo-500/20 dark:border-indigo-500/30',
-    highlights: ['WebSocket nativo', 'Latencia < 100ms', 'Reconexión automática', 'Offline-first ready'],
+    highlights: ['WebSocket nativo Supabase', 'Latencia < 2s end-to-end', 'Reconexión automática', 'Offline-first ready'],
+    technicalDetails: 'Supabase Realtime (PostgreSQL logical replication) → WebSocket → cliente Next.js'
   },
   {
     icon: ShieldCheck,
@@ -42,7 +44,8 @@ const features: Feature[] = [
     color: 'from-emerald-500 to-teal-500',
     bgColor: 'bg-emerald-500/10 dark:bg-emerald-950/30',
     borderColor: 'border-emerald-500/20 dark:border-emerald-500/30',
-    highlights: ['PostgreSQL RLS', 'Aislamiento por hotel_id', 'Políticas por rol', 'Auditoría completa'],
+    highlights: ['PostgreSQL RLS nativo', 'Aislamiento por hotel_id', 'Políticas por rol (Admin/Recepción/Limpieza)', 'Auditoría completa en historial_estados_habitacion'],
+    technicalDetails: 'RLS policies en PostgreSQL: hotel_id = auth.jwt() → hotel_id del usuario'
   },
   {
     icon: Zap,
@@ -51,7 +54,8 @@ const features: Feature[] = [
     color: 'from-amber-500 to-orange-500',
     bgColor: 'bg-amber-500/10 dark:bg-amber-950/30',
     borderColor: 'border-amber-500/20 dark:border-amber-500/30',
-    highlights: ['Touch-first 48px', 'Cronómetro visual', 'Alertas SLA', 'Funciona offline'],
+    highlights: ['Touch-first 48px targets', 'Cronómetro visual server-synced', 'Alertas SLA escalonadas', 'Funciona offline con sync posterior'],
+    technicalDetails: 'PWA + Service Worker + IndexedDB para offline + Background Sync API'
   },
   {
     icon: BarChart3,
@@ -60,7 +64,8 @@ const features: Feature[] = [
     color: 'from-violet-500 to-purple-500',
     bgColor: 'bg-violet-500/10 dark:bg-violet-950/30',
     borderColor: 'border-violet-500/20 dark:border-violet-500/30',
-    highlights: ['Tiempo real', 'Por personal/zona/tipo', 'Export CSV/PDF', 'Alertas automáticas'],
+    highlights: ['Tiempo real (Supabase Realtime)', 'Por personal/zona/tipo de habitación', 'Export CSV/PDF', 'Alertas automáticas por SLA'],
+    technicalDetails: 'Recharts + Supabase Realtime subscriptions → métricas materializadas (metricas_limpieza_detalle)'
   },
   {
     icon: Wifi,
@@ -69,7 +74,8 @@ const features: Feature[] = [
     color: 'from-cyan-500 to-blue-500',
     bgColor: 'bg-cyan-500/10 dark:bg-cyan-950/30',
     borderColor: 'border-cyan-500/20 dark:border-cyan-500/30',
-    highlights: ['Webhooks HTTP', 'n8n/Make/Power Auto', 'Reintentos automáticos', 'Logs de ejecución'],
+    highlights: ['Webhooks HTTP firmados', 'n8n/Make/Power Automate', 'Reintentos automáticos con backoff', 'Logs de ejecución y trazabilidad'],
+    technicalDetails: 'Edge Functions (Deno) → HTTP webhook → n8n/Power Automate/Make con HMAC verification'
   },
   {
     icon: Users,
@@ -78,7 +84,8 @@ const features: Feature[] = [
     color: 'from-rose-500 to-pink-500',
     bgColor: 'bg-rose-500/10 dark:bg-rose-950/30',
     borderColor: 'border-rose-500/20 dark:border-rose-500/30',
-    highlights: ['RBAC granular', 'Invitaciones email', '2FA TOTP', 'Log de auditoría'],
+    highlights: ['RBAC granular (4 roles base)', 'Invitaciones por email con token', '2FA TOTP opcional', 'Log de auditoría inmutable'],
+    technicalDetails: 'Supabase Auth + custom claims (JWT) + RLS policies por rol + trigger de auditoría'
   },
 ];
 
@@ -164,7 +171,7 @@ export function FeatureGrid({ isVisible }: FeatureGridProps) {
         {/* Section Header */}
         <div className="text-center max-w-3xl mx-auto mb-16">
           <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-            Arquitectura Modular
+            Capacidades por Rol
           </h2>
           <p className="mt-3 text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white">
             Diseñado para cada integrante de tu operación
@@ -208,7 +215,7 @@ export function FeatureGrid({ isVisible }: FeatureGridProps) {
             <div
               key={item.title}
               className={`p-5 rounded-2xl bg-white/60 dark:bg-[#111625]/60 border border-slate-200/60 dark:border-slate-800/60 transition-all duration-300 hover:border-indigo-500/40 hover:shadow-lg ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'} transition-all duration-700 ease-out`}
-              style={{ transitionDelay: `${(features.length + index) * 100}ms` }}
+              style={{ transitionDelay: `${(6 + index) * 100}ms` }}
             >
               <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-950/80 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mb-3">
                 <item.icon className="w-5 h-5" />

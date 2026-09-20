@@ -1,80 +1,74 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Building2, Sparkles, Clock, CheckCircle2, Users, TrendingUp, Award } from 'lucide-react';
+import { Building2, Sparkles, Clock, CheckCircle2, Users, TrendingUp, Award, Database, Wifi, Zap, Shield, Globe, Server, Cpu } from 'lucide-react';
 
 interface StatItem {
   label: string;
-  value: number;
+  value: string;
   suffix?: string;
   prefix?: string;
   icon: React.ElementType;
   color: string;
   bgColor: string;
   description?: string;
-  trend?: string;
+  category: 'technical' | 'capability' | 'architecture';
 }
 
 const stats: StatItem[] = [
   {
-    label: 'Hoteles Activos',
-    value: 247,
-    suffix: '+',
-    icon: Building2,
+    label: 'Arquitectura',
+    value: 'Jamstack/Serverless',
+    icon: Globe,
     color: 'text-indigo-600 dark:text-indigo-400',
     bgColor: 'bg-indigo-500/10 dark:bg-indigo-950/30',
-    description: 'En 12 países',
-    trend: '+12% vs mes anterior',
+    description: 'Next.js 16 App Router + Supabase Edge',
+    category: 'architecture',
   },
   {
-    label: 'Limpiezas Diarias',
-    value: 12500,
-    suffix: '+',
-    icon: Sparkles,
+    label: 'Base de Datos',
+    value: 'PostgreSQL + RLS',
+    icon: Database,
     color: 'text-emerald-600 dark:text-emerald-400',
     bgColor: 'bg-emerald-500/10 dark:bg-emerald-950/30',
-    description: 'Procesadas en tiempo real',
-    trend: '+8% vs semana anterior',
+    description: 'Row Level Security nativo por hotel_id',
+    category: 'architecture',
   },
   {
-    label: 'Tiempo Promedio',
-    value: 28,
-    suffix: ' min',
-    icon: Clock,
-    color: 'text-amber-600 dark:text-amber-400',
-    bgColor: 'bg-amber-500/10 dark:bg-amber-950/30',
-    description: 'Por habitación estándar',
-    trend: '-3 min optimizado',
-  },
-  {
-    label: 'Cumplimiento SLA',
-    value: 94.2,
-    suffix: '%',
-    icon: CheckCircle2,
+    label: 'Tiempo Real',
+    value: 'Supabase Realtime',
+    icon: Wifi,
     color: 'text-violet-600 dark:text-violet-400',
     bgColor: 'bg-violet-500/10 dark:bg-violet-950/30',
-    description: 'En tiempo límite configurado',
-    trend: '+2.1% este trimestre',
+    description: 'WebSockets nativos, latencia < 2s',
+    category: 'technical',
   },
   {
-    label: 'Personal Activo',
-    value: 3420,
-    suffix: '+',
-    icon: Users,
+    label: 'Edge Runtime',
+    value: 'Supabase Edge (Deno)',
+    icon: Server,
     color: 'text-cyan-600 dark:text-cyan-400',
     bgColor: 'bg-cyan-500/10 dark:bg-cyan-950/30',
-    description: 'Camareras y recepcionistas',
-    trend: '+245 nuevos usuarios',
+    description: 'Edge Functions para webhooks y automatización',
+    category: 'technical',
   },
   {
-    label: 'Uptime Plataforma',
-    value: 99.9,
-    suffix: '%',
-    icon: Award,
-    color: 'text-rose-600 dark:text-rose-400',
-    bgColor: 'bg-rose-500/10 dark:bg-rose-950/30',
-    description: 'Disponibilidad garantizada',
-    trend: 'SLA 99.9% cumplido',
+    label: 'Automatización',
+    value: 'n8n / Power Automate',
+    icon: Zap,
+    color: 'text-amber-600 dark:text-amber-400',
+    bgColor: 'bg-amber-500/10 dark:bg-amber-950/30',
+    description: 'Webhooks HTTP con HMAC + reintentos',
+    category: 'capability',
+  },
+  {
+    label: 'Mobile PWA',
+    value: 'PWA Instalable',
+    icon: Globe,
+    color: 'text-indigo-600 dark:text-indigo-400',
+    bgColor: 'bg-indigo-500/10 dark:bg-indigo-950/30',
+    description: 'PWA instalable, offline-first, push notifications',
+    category: 'capability',
   },
 ];
 
@@ -95,36 +89,15 @@ interface AnimatedCounterProps {
 }
 
 function AnimatedCounter({ stat, isVisible, index }: AnimatedCounterProps) {
-  const [count, setCount] = useState(0);
-  const [hasAnimated, setHasAnimated] = useState(false);
   const elementRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!isVisible || hasAnimated) return;
+    if (!isVisible) return;
 
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          setHasAnimated(true);
-          const duration = 2000;
-          const startTime = Date.now();
-          const startValue = 0;
-          const endValue = stat.value;
-
-          const animate = () => {
-            const elapsed = Date.now() - startTime;
-            const progress = Math.min(elapsed / duration, 1);
-            // Easing function: easeOutExpo
-            const easedProgress = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
-            const currentValue = startValue + (endValue - startValue) * easedProgress;
-            setCount(currentValue);
-
-            if (progress < 1) {
-              requestAnimationFrame(animate);
-            }
-          };
-
-          requestAnimationFrame(animate);
+          entry.target.classList.add('animate-in');
           observer.unobserve(entry.target);
         }
       },
@@ -136,9 +109,7 @@ function AnimatedCounter({ stat, isVisible, index }: AnimatedCounterProps) {
     }
 
     return () => observer.disconnect();
-  }, [isVisible, hasAnimated, stat.value]);
-
-  const displayValue = hasAnimated ? formatNumber(Math.floor(count)) : '0';
+  }, [isVisible]);
 
   return (
     <div
@@ -146,15 +117,21 @@ function AnimatedCounter({ stat, isVisible, index }: AnimatedCounterProps) {
       className={`relative p-6 rounded-2xl border ${stat.bgColor} border-slate-200/60 dark:border-slate-800/60 transition-all duration-500 hover:border-indigo-500/40 hover:shadow-xl hover:shadow-indigo-500/10 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'} transition-all duration-700 ease-out`}
       style={{ transitionDelay: `${index * 100}ms` }}
     >
+      {/* Category Badge */}
+      <div className="mb-4 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300">
+        <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+        <span>{stat.category.toUpperCase()}</span>
+      </div>
+
       {/* Icon */}
       <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-4 ${stat.bgColor} ${stat.color}`}>
         <stat.icon className="w-6 h-6" aria-hidden="true" />
       </div>
 
-      {/* Counter */}
+      {/* Value */}
       <div className="mb-2">
-        <span className="text-3xl sm:text-4xl font-black text-slate-900 dark:text-white tabular-nums">
-          {stat.prefix || ''}{displayValue}{stat.suffix || ''}
+        <span className="text-3xl sm:text-4xl font-black text-slate-900 dark:text-white tabular-nums leading-tight">
+          {stat.value}
         </span>
       </div>
 
@@ -163,15 +140,7 @@ function AnimatedCounter({ stat, isVisible, index }: AnimatedCounterProps) {
 
       {/* Description */}
       {stat.description && (
-        <div className="text-xs text-slate-500 dark:text-slate-400 mb-3">{stat.description}</div>
-      )}
-
-      {/* Trend */}
-      {stat.trend && (
-        <div className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400 font-medium">
-          <TrendingUp className="w-3 h-3" />
-          <span>{stat.trend}</span>
-        </div>
+        <div className="text-xs text-slate-500 dark:text-slate-400 mb-3 leading-relaxed">{stat.description}</div>
       )}
     </div>
   );
@@ -188,13 +157,14 @@ export function StatsCounter({ isVisible }: StatsCounterProps) {
         {/* Section Header */}
         <div className="text-center max-w-3xl mx-auto mb-16">
           <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-            Métricas de la Plataforma
+            Capacidades Técnicas Reales
           </h2>
           <p className="mt-3 text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white">
-            Números que respaldan nuestra promesa
+            Arquitectura moderna sin métricas infladas
           </p>
           <p className="mt-3 text-sm sm:text-base text-slate-600 dark:text-slate-400">
-            Datos agregados en tiempo real de nuestra red global de hoteles. Actualizados cada minuto.
+            Solo capacidades técnicas reales y verificables. Sin métricas infladas ni clientes ficticios.
+            La arquitectura habla por sí misma.
           </p>
         </div>
 
@@ -205,19 +175,28 @@ export function StatsCounter({ isVisible }: StatsCounterProps) {
           ))}
         </div>
 
-        {/* Live Indicator */}
-        <div className="mt-12 text-center">
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-500/10 dark:bg-emerald-500/20 border border-emerald-500/20">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-            </span>
-            <span className="text-sm font-medium text-emerald-700 dark:text-emerald-300">
-              Actualización en tiempo real cada 30 segundos
-            </span>
+        {/* Technical Stack Summary */}
+        <div className="mt-16">
+          <div className="bg-slate-900 dark:bg-slate-950 rounded-3xl p-8 sm:p-12 text-center">
+            <h3 className="text-lg sm:text-xl font-bold text-white mb-4">
+              Stack Tecnológico Verificable
+            </h3>
+            <div className="flex flex-wrap items-center justify-center gap-3 text-sm">
+              <span className="px-3 py-1 rounded-full bg-indigo-600/20 text-indigo-400 border border-indigo-500/30">Next.js 16 (App Router)</span>
+              <span className="px-3 py-1 rounded-full bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">PostgreSQL + RLS</span>
+              <span className="px-3 py-1 rounded-full bg-violet-600/20 text-violet-400 border border-violet-500/30">Supabase Realtime</span>
+              <span className="px-3 py-1 rounded-full bg-amber-600/20 text-amber-400 border border-amber-500/30">n8n / Edge Functions</span>
+              <span className="px-3 py-1 rounded-full bg-rose-600/20 text-rose-400 border border-rose-500/30">PWA + Service Worker</span>
+              <span className="px-3 py-1 rounded-full bg-cyan-600/20 text-cyan-400 border border-cyan-500/30">TypeScript Strict</span>
+            </div>
+            <p className="mt-6 text-sm text-slate-400 max-w-2xl mx-auto">
+              Sin vendor lock-in · Desplegable en Vercel, Docker o Kubernetes · Código abierto y auditable
+            </p>
           </div>
         </div>
       </div>
     </section>
   );
 }
+
+export default StatsCounter;

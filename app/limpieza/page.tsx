@@ -336,24 +336,28 @@ useEffect(() => {
 
             // Al entrar en "En Limpieza": refrescar propietario y obtener inicio de limpieza
             if (isInProgress(updated.status) && prevStatus !== 'En Limpieza') {
-              refreshRoomOwner(updated.id).then((ownerId) =>
-                setOwners((prev) => ({ ...prev, [updated.id]: ownerId }))
-              );
+              const isLocalStart = localStartRef.current[updated.id] != null;
 
-            // Protección realtime: NO sobrescribir si el usuario local acaba de iniciar esta habitación
-            // (esperamos a que el realtime confirme, pero no sobrescribimos el timer local)
-            const isLocalStart = localStartRef.current[updated.id] != null;
-            if (!isLocalStart) {
-              fetchCleaningStart(updated.id).then((iniciadoAt) => {
-                if (iniciadoAt) {
-                  setCleaningStarts((prev) => ({ ...prev, [updated.id]: iniciadoAt }));
-                }
-              });
-            } else {
-              // Limpiar protección tras confirmar vía realtime
-              delete localStartRef.current[updated.id];
+              // Protección realtime: NO sobrescribir si el usuario local acaba de iniciar esta habitación
+              if (!isLocalStart) {
+                // No iniciamos nosotros → obtener owner de BD y started_at
+                Promise.all([
+                  refreshRoomOwner(updated.id),
+                  fetchCleaningStart(updated.id)
+                ]).then(([ownerId, iniciadoAt]) => {
+                  if (ownerId) {
+                    setOwners((prev) => ({ ...prev, [updated.id]: ownerId }));
+                  }
+                  if (iniciadoAt) {
+                    setCleaningStarts((prev) => ({ ...prev, [updated.id]: iniciadoAt }));
+                  }
+                });
+              } else {
+                // Inicio local: ya tenemos owner y started_at optimistas
+                // Solo limpiar protección, NO sobrescribir owner con null de BD
+                delete localStartRef.current[updated.id];
+              }
             }
-          }
 
             // Al SALIR de "En Limpieza" (cambio a Limpia/Lista, Disponible, Ocupada, etc.):
             // limpiar el timer optimista para detener el cronómetro inmediato
@@ -538,19 +542,27 @@ useEffect(() => {
     const minutosExcedidos = Math.max(0, durationMin - slaMin);
 
     // 1. Consultar el estado_origen real del ciclo activo antes de cerrar
-    const { data: cicloActivo } = await supabase
+    const { data: cicloActivo, error: cicloErrorFind} = await supabase
       .from('ciclos_limpieza')
       .select('id, estado_origen')
       .eq('habitacion_id', room.id)
       .is('finalizado_at', null)
       .maybeSingle();
+console.log('--- DEPURANDO FIN DE LIMPIEZA ---');
+    console.log('Habitación:', room.room_number);
+    console.log('Ciclo Activo Encontrado:', cicloActivo);
+    console.log('Error de Búsqueda (si hubo):', cicloErrorFind);
+    console.log('estado_origen crudo:', cicloActivo?.estado_origen);
 
     const estadoOrigen = (cicloActivo?.estado_origen || '').toLowerCase();
 
-    // 2. Lógica clara: 
-    // - Si el origen ES EXPLICITAMENTE un check-out, la dejamos 'Disponible'.
-    // - Si vino de una habitación ocupada (limpieza de estancia), debe volver a 'Ocupada'.
-    let nuevoEstado = 'Ocupada'; // Por defecto, si es limpieza de estancia, regresa a ocupada
+// Acepta variaciones comunes por si el trigger guarda "Check-Out", "checkout", "sucia (checkout)", etc.
+const esCheckOut = estadoOrigen.includes('check-out') || 
+                   estadoOrigen.includes('checkout') || 
+                   estadoOrigen.includes('salida');
+
+let nuevoEstado = esCheckOut ? 'Disponible' : 'Ocupada';
+
     
     if (estadoOrigen.includes('check-out') || estadoOrigen === 'checkout') {
       nuevoEstado = 'Disponible';
