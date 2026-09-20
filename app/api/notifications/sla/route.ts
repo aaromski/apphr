@@ -46,9 +46,3 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: false, error: err.message }, { status: 400 });
   }
 }
-```[cite: 6, 9]
-
-### Qué cambia con esto:
-1. **Recibe el campo `rol`**: Desde n8n le puedes mandar `"rol": "recepcion"` o `"rol": "limpieza"`.
-2. **Asigna el mensaje adecuado**: Si no mandas un mensaje personalizado, el código genera automáticamente el texto correcto dependiendo de si va para limpieza o para recepción.
-3. **Guarda el `target_role`**: Se inserta en la base de datos para que luego puedas filtrar las notificaciones en la pantalla de cada usuario[cite: 6, 9].
