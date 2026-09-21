@@ -130,7 +130,7 @@ function AnimatedCounter({ stat, isVisible, index }: AnimatedCounterProps) {
 
       {/* Value */}
       <div className="mb-2">
-        <span className="text-3xl sm:text-4xl font-black text-slate-900 dark:text-white tabular-nums leading-tight">
+        <span className="text-base sm:text-lg lg:text-xl font-bold text-slate-900 dark:text-white tabular-nums leading-tight break-words">
           {stat.value}
         </span>
       </div>
