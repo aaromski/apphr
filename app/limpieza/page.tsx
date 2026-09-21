@@ -345,7 +345,7 @@ export default function LimpiezaMobilePage() {
       .on(
   'postgres_changes',
   { event: 'INSERT', schema: 'public', table: 'notifications' },
-  (payload) => {
+  async (payload) => {
     const newNotif = payload.new as { 
       message: string; 
       target_role?: string; 
@@ -353,21 +353,23 @@ export default function LimpiezaMobilePage() {
       kind?: 'status' | 'priority' | 'info' 
     };
 
-    console.log('🔔 Notificación recibida en Realtime:', newNotif);
-
     if (newNotif && newNotif.message) {
       const target = newNotif.target_role ? newNotif.target_role.toLowerCase().trim() : '';
       
       if (target === 'limpieza') {
-        // Si la notificación no trae user_id (es general) O si coincide con el usuario actual
+        // Obtenemos directamente el usuario de la sesión actual de Supabase
+        const { data: { user } } = await supabase.auth.getUser();
+        const activeUserId = user?.id ?? currentUserId;
+
+        // Si la notificación no tiene user_id asignado (es general) O coincide con el usuario autenticado
         const isForMe = !newNotif.user_id || 
                         newNotif.user_id === 'null' || 
-                        newNotif.user_id === currentUserId;
+                        newNotif.user_id === activeUserId;
 
         if (isForMe) {
           triggerNotification(newNotif.message);
         } else {
-          console.warn(`Notificación omitida: esperada para ${newNotif.user_id}, pero el usuario actual es ${currentUserId}`);
+          console.warn(`Notificación omitida: esperada para ${newNotif.user_id}, usuario actual es ${activeUserId}`);
         }
       }
     }
