@@ -343,29 +343,36 @@ export default function LimpiezaMobilePage() {
         }
       )
       .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'notifications' },
-        (payload) => {
-          const newNotif = payload.new as { 
-            message: string; 
-            target_role?: string; 
-            user_id?: string;
-            kind?: 'status' | 'priority' | 'info' 
-          };
+  'postgres_changes',
+  { event: 'INSERT', schema: 'public', table: 'notifications' },
+  (payload) => {
+    const newNotif = payload.new as { 
+      message: string; 
+      target_role?: string; 
+      user_id?: string | null;
+      kind?: 'status' | 'priority' | 'info' 
+    };
 
-          if (newNotif && newNotif.message) {
-            const target = newNotif.target_role ? newNotif.target_role.toLowerCase().trim() : '';
-            
-            if (target === 'limpieza') {
-              if (newNotif.user_id && newNotif.user_id !== currentUserId) {
-                return;
-              }
+    console.log('🔔 Notificación recibida en Realtime:', newNotif);
 
-              triggerNotification(newNotif.message);
-            }
-          }
+    if (newNotif && newNotif.message) {
+      const target = newNotif.target_role ? newNotif.target_role.toLowerCase().trim() : '';
+      
+      if (target === 'limpieza') {
+        // Si la notificación no trae user_id (es general) O si coincide con el usuario actual
+        const isForMe = !newNotif.user_id || 
+                        newNotif.user_id === 'null' || 
+                        newNotif.user_id === currentUserId;
+
+        if (isForMe) {
+          triggerNotification(newNotif.message);
+        } else {
+          console.warn(`Notificación omitida: esperada para ${newNotif.user_id}, pero el usuario actual es ${currentUserId}`);
         }
-      )
+      }
+    }
+  }
+)
       .subscribe();
 
     return () => {
