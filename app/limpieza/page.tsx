@@ -474,70 +474,44 @@ export default function LimpiezaMobilePage() {
   const getTypeConfig = (room: Room) => typeConfigs[getRoomType(room)];
 
   const handleFinishCleaning = async (room: Room) => {
-    const durationMs = getElapsed(room.id);
-    const durationMin = Math.round(durationMs / 60000);
+  const durationMs = getElapsed(room.id);
+  const durationMin = Math.round(durationMs / 60000);
 
-    const cfg = getTypeConfig(room);
-    const slaMin = cfg?.sla_min ?? 45;
-    const cumplioSla = durationMin <= slaMin;
-    const minutosExcedidos = Math.max(0, durationMin - slaMin);
+  const cfg = getTypeConfig(room);
+  const slaMin = cfg?.sla_min ?? 45;
+  const cumplioSla = durationMin <= slaMin;
+  const minutosExcedidos = Math.max(0, durationMin - slaMin);
 
-    const { data: cicloActivo } = await supabase
-      .from('ciclos_limpieza')
-      .select('id, estado_origen')
-      .eq('habitacion_id', room.id)
-      .is('finalizado_at', null)
-      .maybeSingle();
-
-    const estadoOrigen = (cicloActivo?.estado_origen || '').toLowerCase();
-    const esCheckOut = estadoOrigen.includes('check-out') || 
-                       estadoOrigen.includes('checkout') || 
-                       estadoOrigen.includes('salida');
-
-    const nuevoEstado = esCheckOut ? 'Disponible' : 'Ocupada';
-
-    flushSync(() => {
-      setRooms((prev) =>
-        prev.map((r) =>
-          r.id === room.id ? { ...r, status: nuevoEstado } : r
-        )
-      );
-      setOwners((prev) => {
-        const next = { ...prev };
-        delete next[room.id];
-        return next;
-      });
-      setCleaningStarts((prev) => {
-        const next = { ...prev };
-        delete next[room.id];
-        return next;
-      });
+  // 1. Actualización optimista de la UI (la limpiamos de la lista local)
+  flushSync(() => {
+    setRooms((prev) => prev.filter((r) => r.id !== room.id));
+    setOwners((prev) => {
+      const next = { ...prev };
+      delete next[room.id];
+      return next;
     });
+    setCleaningStarts((prev) => {
+      const next = { ...prev };
+      delete next[room.id];
+      return next;
+    });
+  });
 
-    const finalizadoAtIso = new Date(serverNow).toISOString();
+  // 2. Enviamos el cambio a la base de datos a un estado neutro ('Limpia/Lista')
+  // El Trigger 3 (fn_trg_ciclo_fin_limpieza) interceptará este cambio, 
+  // leerá el ciclo de la BD y decidirá si la pasa a 'Disponible' u 'Ocupada'.
+  const { error } = await supabase
+    .from('rooms')
+    .update({ status: 'Limpia/Lista' })
+    .eq('id', room.id);
 
-    await Promise.all([
-      supabase
-        .from('rooms')
-        .update({ status: nuevoEstado })
-        .eq('id', room.id),
-      supabase
-        .from('ciclos_limpieza')
-        .update({
-          finalizado_at: finalizadoAtIso,
-          duracion_min: durationMin,
-          cumplio_sla: cumplioSla,
-          minutos_excedidos: minutosExcedidos,
-        })
-        .eq('habitacion_id', room.id)
-        .is('finalizado_at', null),
-    ]);
-
-    setToastMessage(
-      `Habitación ${room.room_number} completada y cambiada a ${nuevoEstado} (${formatDuration(durationMs)})`
-    );
+  if (error) {
+    console.error('Error al finalizar limpieza:', error.message);
+  } else {
+    setToastMessage(`Habitación ${room.room_number} completada exitosamente.`);
     setTimeout(() => setToastMessage(null), 3500);
-  };
+  }
+};
 
   const sendSlaWebhook = async (room: Room) => {
     const webhookUrl = process.env.NEXT_PUBLIC_N8N_WEBHOOK_URL || '';
