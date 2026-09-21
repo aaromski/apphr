@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { Wifi, Server, Activity, Database, Users, Shield, Zap, Globe, CheckCircle2 } from 'lucide-react';
 
 interface LiveMetric {
@@ -13,7 +13,7 @@ interface LiveMetric {
   description: string;
 }
 
-const platformMetrics: LiveMetric[] = [
+const platformMetrics = [
   {
     label: 'Arquitectura',
     value: 'Jamstack/Serverless',
@@ -82,7 +82,7 @@ function LiveStatsBar() {
     healthy: 'bg-emerald-500',
     warning: 'bg-amber-500',
     critical: 'bg-rose-500',
-  };
+  } as const;
 
   return (
     <section className="relative overflow-hidden bg-slate-900/95 dark:bg-slate-950/95 border-t border-slate-800/50">
@@ -129,7 +129,7 @@ function LiveStatsBar() {
                   <metric.icon className="w-5 h-5" style={{ color: metric.color }} />
                 </div>
                 <div
-                  className={`w-2 h-2 rounded-full ${statusColors[metric.status]} animate-pulse`}
+                  className={`w-2 h-2 rounded-full ${statusColors[metric.status as keyof typeof statusColors]} animate-pulse`}
                   aria-label={`Estado: ${metric.status}`}
                 />
               </div>

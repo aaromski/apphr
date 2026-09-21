@@ -4,6 +4,9 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowRight, Building2, ShieldCheck, Clock, Zap, Database, Wifi, Globe } from 'lucide-react';
 
+// URL de descarga del APK - colocar el archivo .apk en /public/downloads/apphr-mobile.apk
+const APK_DOWNLOAD_URL = '/downloads/apphr-mobile.apk';
+
 export function HeroSection() {
   const [isVisible, setIsVisible] = useState(false);
 
@@ -31,22 +34,22 @@ export function HeroSection() {
 
       {/* Main Headline */}
       <div className={`text-center ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'} transition-all duration-700 ease-out delay-100`}>
-        <h1 className="text-3xl sm:text-5xl lg:text-6xl xl:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.1]">
+        <h1 className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.15]">
           Elimina la latencia entre Recepción y Limpieza
           <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 via-violet-500 to-purple-500 dark:from-indigo-400 dark:via-violet-400 dark:to-purple-400">
-            {'de 45\u201390 min a < 2 segundos'}
+            {'de 45–90 min a < 2 segundos'}
           </span>
         </h1>
 
         {/* Subtitle */}
-        <p className="mt-6 text-sm sm:text-base lg:text-lg text-slate-600 dark:text-slate-400 max-w-3xl mx-auto leading-relaxed">
+        <p className="mt-5 text-sm sm:text-base lg:text-lg text-slate-600 dark:text-slate-400 max-w-3xl mx-auto leading-relaxed">
           Sincronización instantánea entre Recepción, Camareras y Gerencia mediante WebSockets nativos (Supabase Realtime).
           Elimina llamadas por radio, hojas de papel y tiempos muertos en la rotación de habitaciones.
         </p>
       </div>
 
       {/* Technical Pillars */}
-      <div className={`mt-12 grid grid-cols-2 md:grid-cols-4 gap-4 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'} transition-all duration-700 ease-out delay-200`}>
+      <div className={`mt-10 grid grid-cols-2 md:grid-cols-4 gap-4 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'} transition-all duration-700 ease-out delay-200`}>
         <TechnicalPillar
           icon={<Database className="w-5 h-5" />}
           label="Arquitectura Jamstack/Serverless"
@@ -70,7 +73,7 @@ export function HeroSection() {
       </div>
 
       {/* CTAs */}
-      <div className={`mt-12 flex flex-col sm:flex-row items-center justify-center gap-4 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'} transition-all duration-700 ease-out delay-200`}>
+      <div className={`mt-10 flex flex-col sm:flex-row items-center justify-center gap-4 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'} transition-all duration-700 ease-out delay-200`}>
         <Link
           href="/registro"
           className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl text-sm font-semibold bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white shadow-xl shadow-indigo-600/30 active:scale-[0.98] transition-all relative overflow-hidden group"
@@ -87,6 +90,34 @@ export function HeroSection() {
           <ShieldCheck className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
           <span>Acceso al Sistema</span>
         </Link>
+      </div>
+
+      {/* APK Download Section */}
+      <div className={`mt-16 pt-12 border-t border-slate-200/80 dark:border-slate-800/80 ${isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'} transition-all duration-700 ease-out delay-300`}>
+        <div className="max-w-2xl mx-auto text-center">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800/80 text-emerald-700 dark:text-emerald-300 mb-4 shadow-sm">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+            </span>
+            <span>Disponible para Android · Instalación directa</span>
+          </div>
+          
+          <a
+            href={APK_DOWNLOAD_URL}
+            download
+            className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl text-base font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-xl shadow-emerald-600/30 active:scale-[0.98] transition-all relative overflow-hidden group"
+          >
+            <span className="relative z-10">Descargar APK Móvil</span>
+            <svg className="w-5 h-5 relative z-10 group-hover:translate-x-1 transition-transform" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z" />
+            </svg>
+          </a>
+          
+          <p className="mt-4 text-sm text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+            El archivo APK se descarga directamente. Requiere Android 8.0+ · Tamaño ~15 MB
+          </p>
+        </div>
       </div>
 
       {/* Technical Trust Indicators */}
