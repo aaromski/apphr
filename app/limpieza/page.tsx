@@ -428,28 +428,24 @@ export default function LimpiezaMobilePage() {
 
     // 1. PRIMERO: Crear/actualizar ciclo con usuario_id e iniciado_at ANTES de cambiar estado
 
+    // 1. PRIMERO: Cerrar cualquier ciclo anterior que haya quedado abierto por error en esta habitación
+    await supabase
+      .from('ciclos_limpieza')
+      .update({ finalizado_at: serverStartIso })
+      .eq('habitacion_id', room.id)
+      .is('finalizado_at', null);
+
+    // 2. SEGUNDO: Insertar el nuevo ciclo de limpieza de forma tradicional
     const { error: cicloError } = await supabase
       .from('ciclos_limpieza')
-      .upsert({
+      .insert({
         habitacion_id: room.id,
         hotel_id: room.hotel_id,
         usuario_id: currentUserId,
         estado_origen: room.status,
         sucia_at: serverStartIso,
         iniciado_at: serverStartIso,
-      }, { onConflict: 'habitacion_id' });
-
-    if (cicloError) {
-      console.error('Error al crear ciclo:', cicloError.message);
-      flushSync(() => {
-        setCleaningStarts((prev) => { const n = { ...prev }; delete n[room.id]; return n; });
-        setRooms((prev) => prev.map((r) => r.id === room.id ? { ...r, status: room.status } : r));
-        setOwners((prev) => { const n = { ...prev }; delete n[room.id]; return n; });
       });
-      delete localStartRef.current[room.id];
-      alert(`No se pudo iniciar la limpieza: ${cicloError.message}`);
-      return;
-    }
 
     // 2. LUEGO: Actualizar estado de la habitación (dispara trigger)
     const { error: roomError } = await supabase
