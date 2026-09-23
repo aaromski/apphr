@@ -21,9 +21,9 @@ export async function POST(request: Request) {
     let textMessage = mensaje;
     if (!textMessage) {
       if (targetRole === 'limpieza') {
-        textMessage = `⚠️ Atención limpieza: La habitación ${habitacion} ha excedido el tiempo recomendado.`;
+        textMessage = ` Atención limpieza: La habitación ${habitacion} ha excedido el tiempo recomendado.`;
       } else {
-        textMessage = `⚠️ Alerta de SLA excedido para la habitación ${habitacion}`;
+        textMessage = ` Alerta de SLA excedido para la habitación ${habitacion}`;
       }
     }
 
