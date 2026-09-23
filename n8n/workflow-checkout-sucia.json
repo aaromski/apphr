@@ -1,0 +1,52 @@
+{
+  "name": "AppHR - Check-Out a Sucia (RF-04 / HU-03)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "apphr-checkout",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000001",
+      "name": "Webhook Check-Out",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "apphr-checkout"
+    },
+    { 
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://earlammmyhbcnkzlddzs.supabase.co/rest/v1/rooms?hotel_id=eq.{{ $json.body.hotel_id }}&room_number=eq.{{ $json.body.habitacion }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVhcmxhbW1teWhiY25remxkZHpzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODg0ODU1NSwiZXhwIjoyMTA0NDI0NTU1fQ.uNP-GUr-Nw_yapzuFi39nrgQYRINbGbnavWu77op5rg" },
+            { "name": "Authorization", "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVhcmxhbW1teWhiY25remxkZHpzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODg0ODU1NSwiZXhwIjoyMTA0NDI0NTU1fQ.uNP-GUr-Nw_yapzuFi39nrgQYRINbGbnavWu77op5rg" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=minimal" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"status\": \"Sucia\" }",
+        "options": {}
+      },
+      "id": "b1b2c3d4-0002-4000-8000-000000000002",
+      "name": "Marcar Habitación Sucia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Check-Out": {
+      "main": [[{ "node": "Marcar Habitación Sucia", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "tags": []
+}

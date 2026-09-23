@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "417516065136",
+    "project_id": "apphr-ab6fa",
+    "storage_bucket": "apphr-ab6fa.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:417516065136:android:5a6d51916fadd87079bfb5",
+        "android_client_info": {
+          "package_name": "com.hotel.apphr"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCpBCiBuexxzfDrqqLydOlHtfSw1uyk2wo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
