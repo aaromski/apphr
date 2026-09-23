@@ -606,7 +606,7 @@ export default function LimpiezaMobilePage() {
       await fetch(`https://ntfy.sh/${ntfyTopic}`, {
         method: 'POST',
         headers: {
-          Title: '⚠️ Alerta de limpieza',
+          Title: ' Alerta de limpieza',
           Priority: 'urgent',
           Tags: 'warning',
         },
@@ -860,7 +860,7 @@ export default function LimpiezaMobilePage() {
       {/* TOAST FLOTANTE DE NOTIFICACIONES */}
       {toastMessage && (
         <div className="fixed bottom-20 left-4 right-4 bg-emerald-500 text-white p-3 rounded-xl text-xs font-semibold text-center shadow-lg animate-bounce">
-          🔔 {toastMessage}
+           {toastMessage}
         </div>
       )}
     </div>
