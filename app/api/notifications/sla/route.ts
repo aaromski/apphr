@@ -5,41 +5,97 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-export async function POST(request: Request) {
-  console.log('====================================');
-  console.log('🚀 [DEBUG 1] Petición recibida en /api/notifications/sla');
+/**
+ * Envía la notificación Push directamente a los servidores de Firebase FCM
+ */
+/**
+ * Envía la notificación Push directamente a los servidores de Firebase FCM
+ */
+async function sendFirebasePushNotification(fcmToken: string, title: string, bodyText: string) {
+  const firebaseServerKey = process.env.FIREBASE_SERVER_KEY;
+
+  if (!firebaseServerKey || !fcmToken) return;
 
   try {
-    const rawText = await request.text();
-    console.log('📦 [DEBUG 1.1] Body bruto recibido:', rawText);
+    await fetch('https://fcm.googleapis.com/fcm/send', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `key=${firebaseServerKey}`,
+      },
+      body: JSON.stringify({
+        to: fcmToken,
+        priority: 'high', // Prioridad máxima de entrega en FCM
+        content_available: true, // Notifica al SO en segundo plano
+        time_to_live: 0, // Entrega inmediata sin encolar
+        // Android muestra este bloque aunque la app este minimizada o la pantalla apagada.
+        notification: {
+          title,
+          body: bodyText,
+          sound: 'default',
+          channel_id: 'high_priority_notifications',
+        },
+        data: {
+          title: title,
+          body: bodyText,
+          channel_id: 'high_priority_notifications',
+          sound: 'default',
+          click_action: 'FLUTTER_NOTIFICATION_CLICK',
+        },
+        android: {
+          priority: 'high',
+          ttl: '0s',
+        },
+      }),
+    });
+  } catch (fcmError) {
+    console.error('Error enviando Push vía Firebase:', fcmError);
+  }
+}
 
-    let body: any = {};
-    if (rawText) {
-      try {
-        body = JSON.parse(rawText);
-      } catch (pErr) {
-        console.error('❌ [DEBUG 1.2] Error parseando JSON:', pErr);
-      }
+async function sendNtfyNotification(title: string, bodyText: string) {
+  const topic = process.env.NTFY_TOPIC || 'apphr-hotel-152';
+
+  try {
+    const response = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
+      method: 'POST',
+      headers: {
+        Title: title,
+        Priority: 'urgent',
+        Tags: 'warning',
+      },
+      body: bodyText,
+    });
+
+    if (!response.ok) {
+      console.error('Error enviando notificación vía ntfy:', response.status, response.statusText);
     }
+  } catch (ntfyError) {
+    console.error('Error conectando con ntfy:', ntfyError);
+  }
+}
 
-    const { hotel_id, habitacion, mensaje, rol, user_id } = body;
-    console.log('📋 [DEBUG 1.3] Datos extraídos:', { hotel_id, habitacion, mensaje, rol, user_id });
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    // Extraemos también fcm_token por si viene directo desde n8n/webhook
+    const { hotel_id, habitacion, mensaje, rol, user_id, fcm_token } = body;
 
     const targetRole = rol || 'recepcion';
+    
     let textMessage = mensaje;
     if (!textMessage) {
       if (targetRole === 'limpieza') {
-        textMessage = `⚠️ Atención limpieza: La habitación ${habitacion || 'N/A'} ha excedido el tiempo recomendado.`;
+        textMessage = `⚠️ Atención limpieza: La habitación ${habitacion} ha excedido el tiempo recomendado.`;
       } else {
-        textMessage = `⚠️ Alerta de SLA excedido para la habitación ${habitacion || 'N/A'}`;
+        textMessage = `⚠️ Alerta de SLA excedido para la habitación ${habitacion}`;
       }
     }
 
     const cleanUserId = (!user_id || user_id === 'null' || user_id === '') ? null : user_id;
 
-    // 1. Insertar en Supabase (Esto dispara el Toast y Sonido en React vía Realtime WebSockets)
-    console.log('💾 [DEBUG 2] Insertando en Supabase...');
-    const { data: dbData, error } = await supabase.from('notifications').insert([
+    // 1. Insertar la notificación en Supabase
+    const { error } = await supabase.from('notifications').insert([
       {
         hotel_id: hotel_id || null,
         message: textMessage,
@@ -48,24 +104,47 @@ export async function POST(request: Request) {
         target_role: targetRole,
         user_id: cleanUserId,
       },
-    ]).select();
+    ]);
 
     if (error) {
-      console.error('❌ [DEBUG 2.1] Error en Supabase insert:', error);
-      return NextResponse.json({ success: false, step: 'supabase_insert', error: error.message }, { status: 500 });
+      console.error('Error al guardar notificación en Supabase:', error);
+      return NextResponse.json({ success: false, error: error.message }, { status: 500 });
     }
-    console.log('✅ [DEBUG 2.2] Insert exitoso en Supabase:', dbData);
 
-    console.log('🎉 [DEBUG 3] Proceso completado exitosamente');
-    console.log('====================================');
+    // 2. Obtener el token FCM para el envío Push
+    let targetFcmToken = fcm_token;
+
+    // Si no vino directo en el body, lo buscamos en la tabla profiles con el user_id
+    if (!targetFcmToken && cleanUserId) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('fcm_token')
+        .eq('id', cleanUserId)
+        .single();
+
+      if (profile?.fcm_token) {
+        targetFcmToken = profile.fcm_token;
+      }
+    }
+
+    // 3. Disparar la notificación flotante si se encontró un token válido
+    if (targetFcmToken) {
+      await sendFirebasePushNotification(
+        targetFcmToken,
+        `Alerta (${targetRole.toUpperCase()})`,
+        textMessage
+      );
+    }
+
+    // n8n llama a este endpoint aunque el panel de limpieza esté cerrado.
+    await sendNtfyNotification('Alerta de limpieza', textMessage);
 
     return NextResponse.json({
       success: true,
       message: `Alerta de SLA procesada y enviada a ${targetRole} correctamente`,
-      data: dbData,
+      ntfy: true,
     });
   } catch (err: any) {
-    console.error('💥 [DEBUG CRITICAL] Error no capturado en la ruta:', err);
-    return NextResponse.json({ success: false, step: 'global_catch', error: err?.message || String(err) }, { status: 500 });
+    return NextResponse.json({ success: false, error: err.message }, { status: 400 });
   }
 }
