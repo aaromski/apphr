@@ -19,7 +19,7 @@ export async function POST(request: Request) {
         success: false,
         skipped: true,
         message: 'Webhook URL not configured',
-      }, { status: 200 });
+      }, { status: 503 });
     }
 
     const response = await fetch(webhookUrl, {
@@ -38,7 +38,7 @@ export async function POST(request: Request) {
         success: false,
         skipped: false,
         message: `Webhook returned ${response.status}`,
-      }, { status: 200 });
+      }, { status: 502 });
     }
 
     return NextResponse.json({ success: true, skipped: false });
@@ -48,6 +48,6 @@ export async function POST(request: Request) {
       success: false,
       skipped: true,
       message: err?.message || 'Unknown checkout webhook error',
-    }, { status: 200 });
+    }, { status: 502 });
   }
 }
