@@ -297,7 +297,7 @@ export default function AdminDashboardPage() {
   const [roomNumber, setRoomNumber] = useState('');
   const [roomNumberEnd, setRoomNumberEnd] = useState('');
   const [selectedZonaId, setSelectedZonaId] = useState('');
-  const [roomType, setRoomType] = useState('Estándar');
+  const [roomType, setRoomType] = useState<string>('');
   
   // Formulario de Usuario
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
@@ -776,11 +776,11 @@ export default function AdminDashboardPage() {
       const zonaNombre = zonaSeleccionada ? zonaSeleccionada.nombre : '';
 
       // Obtener el UUID del tipo de habitación seleccionado
-      const tipoSeleccionado = roomTypes.find(rt => rt.room_type === roomType);
+      const tipoSeleccionado = roomTypes.find(rt => rt.id === roomType);
       const tipoHabitacionId = tipoSeleccionado?.id;
 
       if (!tipoHabitacionId) {
-        alert('Tipo de habitación no válido.');
+         alert('Tipo de habitación no válido. Por favor seleccione un tipo.');
         setSubmitting(false);
         return;
       }
