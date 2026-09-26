@@ -164,7 +164,7 @@ export default function TiemposConfig() {
       sla_min: sla,
       activo: true,
       updated_at: new Date().toISOString(),
-    });
+    })
     .select('id, room_type, tiempo_estandar_min, sla_min, activo')
     .single();
     setAdding(false);
