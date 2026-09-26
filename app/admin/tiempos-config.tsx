@@ -20,7 +20,7 @@ interface TiemposConfigProps {
   onTypeCreated?: (newType: { id: string; room_type: string; tiempo_estandar_min: number; sla_min: number }) => void;
 }
 
-export default function TiemposConfig() {
+export default function TiemposConfig({ onTypeCreated }: TiemposConfigProps = {}) {
   const [hotelId, setHotelId] = useState<string | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
   const [tiposHotel, setTiposHotel] = useState<string[]>([]);
