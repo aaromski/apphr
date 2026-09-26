@@ -103,7 +103,7 @@ interface UsuarioData {
 interface RoomTypeConfig {
   id: string;
   room_type: string;
-  tiempo_estandar_min: number;
+  _estandar_min: number;
   sla_min: number;
 }
 
@@ -149,7 +149,7 @@ interface AnalyticsData {
 }
 
 interface KpisData {
-  tiempoPromedio: string;
+  Promedio: string;
   habitacionesLimpias: string;
   alertasSla: string;
   personalActivo: string;
@@ -262,11 +262,15 @@ export default function AdminDashboardPage() {
     const params = new URLSearchParams(window.location.search);
     const seccion = params.get('seccion');
     const tab = params.get('tab');
+    const roomTypeId = params.get('room_type_id');
     if (seccion === 'parametrica' || seccion === 'usuarios') {
       setActiveSection(seccion);
     }
     if (tab === 'zonas' || tab === 'habitaciones' || tab === 'tiempos' || tab === 'usuarios') {
       setActiveTab(tab);
+    }
+    if (roomTypeId) {
+      setRoomType(roomTypeId);
     }
     // Close sidebar on mobile when navigating
     if (typeof window !== 'undefined' && window.innerWidth < 1024) {
