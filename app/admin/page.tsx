@@ -103,7 +103,7 @@ interface UsuarioData {
 interface RoomTypeConfig {
   id: string;
   room_type: string;
-  _estandar_min: number;
+  tiempo_estandar_min: number;
   sla_min: number;
 }
 
@@ -149,7 +149,7 @@ interface AnalyticsData {
 }
 
 interface KpisData {
-  Promedio: string;
+  tiempoPromedio: string;
   habitacionesLimpias: string;
   alertasSla: string;
   personalActivo: string;
@@ -1220,7 +1220,19 @@ export default function AdminDashboardPage() {
               </div>
 
               {/* CONFIGURACIÓN DE TIEMPOS Y CONTROLES */}
-              {activeTab === 'tiempos' && <TiemposConfig />}
+              {activeTab === 'tiempos' && (
+                <TiemposConfig
+                  onTypeCreated={(newType) => {
+                    // 1. Agregar el nuevo tipo al estado local
+                    setRoomTypes((prev) => {
+                      if (prev.some((rt) => rt.id === newType.id)) return prev;
+                      return [...prev, newType].sort((a, b) => a.room_type.localeCompare(b.room_type));
+                    });
+                    // 2. Asignar el ID UUID como seleccionado para el formulario de habitaciones
+                    setRoomType(newType.id);
+                  }}
+                />
+              )}
 
               {/* TABLA DE USUARIOS */}
               {activeTab === 'usuarios' && (
