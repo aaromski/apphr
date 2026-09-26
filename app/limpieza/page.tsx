@@ -304,7 +304,7 @@ export default function LimpiezaMobilePage() {
           room_type_config:tipo_habitacion_id ( id, room_type, tiempo_estandar_min, sla_min ),
           zonas:zona_id ( nombre )
         `)
-        .eq('hotel_id', userProfile.hotel_id)
+        .eq('hotel_id', userProfile?.hotel_id)
         .order('room_number', { ascending: true });
 
       if (data) {
