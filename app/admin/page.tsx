@@ -385,8 +385,9 @@ export default function AdminDashboardPage() {
         .select('id, room_type, tiempo_estandar_min, sla_min')
         .eq('hotel_id', adminHotelId)
         .order('room_type', { ascending: true });
-      if (roomTypeData) {
+      if (roomTypeData && roomTypeData.length > 0) {
         setRoomTypes(roomTypeData);
+        setRoomType((prev) => prev || roomTypeData[0]?.id || '');
       }
     }
 
@@ -1195,7 +1196,12 @@ export default function AdminDashboardPage() {
                         setZonaMode('rango');
                         setZonaError('');
                       }
-                      else if (activeTab === 'habitaciones') setModalType('habitacion');
+                      else if (activeTab === 'habitaciones') {
+                        setModalType('habitacion');
+                        if (!roomType && roomTypes?.length) {
+                          setRoomType(roomTypes[0]?.id ?? '');
+                        }
+                      }
                       else { setModalType('usuario'); setUserName(''); setUserEmail(''); setUserRole('recepcionista'); setUserPassword(''); }
                       setIsModalOpen(true);
                     }}
