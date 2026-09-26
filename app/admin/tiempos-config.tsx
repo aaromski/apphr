@@ -16,6 +16,10 @@ interface Feedback {
   text: string;
 }
 
+interface TiemposConfigProps {
+  onTypeCreated?: (newType: { id: string; room_type: string; tiempo_estandar_min: number; sla_min: number }) => void;
+}
+
 export default function TiemposConfig() {
   const [hotelId, setHotelId] = useState<string | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
@@ -153,7 +157,7 @@ export default function TiemposConfig() {
     }
 
     setAdding(true);
-    const { error } = await supabase.from('room_type_config').insert({
+    const { data: newRecord, error } = await supabase.from('room_type_config').insert({
       hotel_id: hotelId,
       room_type: tipo,
       tiempo_estandar_min: tiempoEstandar,
@@ -161,6 +165,8 @@ export default function TiemposConfig() {
       activo: true,
       updated_at: new Date().toISOString(),
     });
+    .select('id, room_type, tiempo_estandar_min, sla_min, activo')
+    .single();
     setAdding(false);
 
     if (error) {
@@ -175,6 +181,10 @@ export default function TiemposConfig() {
     setNuevoTiempoEstandar(30);
     setNuevoSla(45);
     showFeedback('ok', `Tipo "${tipo}" agregado correctamente.`);
+
+  if (newRecord && onTypeCreated) {
+      onTypeCreated(newRecord);
+    }
   };
 
   const toggleActive = async (roomType: string, currentlyActive: boolean) => {
