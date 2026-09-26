@@ -236,8 +236,10 @@ export default function DashboardPage() {
 
   useEffect(() => {
     async function fetchInitialData() {
-      // 1. Obtener perfil del usuario
+      // 1. Obtener perfil del usuario primero
       const { data: { session } } = await supabase.auth.getSession();
+      let currentHotelId: string | null = null;
+
       if (session?.user) {
         const { data: profile } = await supabase
           .from('profiles')
@@ -247,7 +249,9 @@ export default function DashboardPage() {
 
         if (profile) {
           setUserData(profile);
-          if (profile.hotel_id) {
+          currentHotelId = profile?.hotel_id ?? null;
+
+          if (profile?.hotel_id) {
             const { data: cfg } = await supabase
               .from('room_type_config')
               .select('room_type, tiempo_estandar_min, sla_min')
@@ -270,15 +274,20 @@ export default function DashboardPage() {
         }
       }
 
-      // 2. Obtener habitaciones y relaciones
-      const { data, error } = await supabase
+      // 2. Construir la consulta de habitaciones incluyendo el filtro por hotel_id
+      let query = supabase
         .from('rooms')
         .select(`
           *,
           room_type_config:tipo_habitacion_id ( id, room_type, tiempo_estandar_min, sla_min ),
           zonas:zona_id ( nombre )
-        `)
-        .order('room_number', { ascending: true });
+        `);
+
+      if (currentHotelId) {
+        query = query.eq('hotel_id', currentHotelId);
+      }
+
+      const { data, error } = await query.order('room_number', { ascending: true });
 
       if (error) {
         console.error('Error cargando habitaciones:', error.message);
@@ -308,12 +317,12 @@ export default function DashboardPage() {
         }
       }
 
-      // 3. Obtener zonas/pisos
-      if (userData?.hotel_id) {
+      // 3. Obtener zonas/pisos del hotel correspondiente
+      if (currentHotelId) {
         const { data: zonasData } = await supabase
           .from('zonas')
           .select('nombre')
-          .eq('hotel_id', userData.hotel_id)
+          .eq('hotel_id', currentHotelId)
           .order('nombre', { ascending: true });
 
         if (zonasData) {
@@ -902,7 +911,7 @@ export default function DashboardPage() {
                         )}
                         {room.zonas?.nombre && (
                           <span className={c('px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 text-[10px] font-medium')}>
-                            {room.zonas.nombre}
+                            {room.zonas?.nombre}
                           </span>
                         )}
                       </div>
