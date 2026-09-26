@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
 import { supabase } from '@/lib/supabase';
 import { playNotificationSound } from '@/lib/notify-sound';
 import { useRouter } from 'next/navigation';
@@ -26,17 +25,17 @@ import {
   Menu
 } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
-import { NotificationToast } from '@/components/NotificationToast';
 
-// Helper to avoid Turbopack regex parsing issues with Tailwind classes containing '/'
+// Helper para concatenar clases condicionalmente
 function cn(...classes: (string | undefined | null | false)[]): string {
   return classes.filter(Boolean).join(' ');
 }
 
-// Safe className helper to avoid Turbopack regex parsing issues with Tailwind '/'
+// Safe className helper para evitar inconvenientes de parseo en algunas configuraciones de Next.js/Turbopack
 function c(cls: string): string {
   return cls;
 }
+
 // ─── Server Time Sync ───────────────────────────────────────────
 // Offset medido una vez al cargar: serverTime - localTime
 async function getServerTimeOffset(): Promise<number> {
@@ -49,7 +48,8 @@ async function getServerTimeOffset(): Promise<number> {
       }
     }
   } catch {}
-  // Fallback: query ligera a una tabla pequeña para medir latencia y obtener now()
+  
+  // Fallback: consulta ligera a la base de datos para estimar la latencia
   const start = Date.now();
   const { data, error } = await supabase.from('ciclos_limpieza').select('id').limit(1);
   const end = Date.now();
@@ -92,7 +92,8 @@ export default function DashboardPage() {
   const router = useRouter();
   const [rooms, setRooms] = useState<Room[]>([]);
   const roomsRef = useRef<Room[]>([]);
-  // cleaningStarts[habitacion_id] = iniciado_at from ciclos_limpieza (ISO string)
+  
+  // cleaningStarts[habitacion_id] = timestamp de inicio (ms)
   const [cleaningStarts, setCleaningStarts] = useState<Record<string, number>>({});
   const lastUserChangeRef = useRef<{ roomId: string; newStatus: string } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -103,12 +104,11 @@ export default function DashboardPage() {
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
   const bellMenuRef = useRef<HTMLDivElement>(null);
 
-  // Mobile responsive states
+  // Estados responsivos móviles
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
-  // Mensaje informativo SOLO cuando el estado operativo real de la habitación cambió.
-  // Los casos especiales (fin de limpieza, ocupación, disponibilidad) reemplazan al genérico.
+  // Mensaje informativo cuando el estado operativo cambia
   const buildStatusChangedMessage = (prevRoom: Room, nextRoom: Room): string => {
     if (prevRoom.status === 'En Limpieza' && nextRoom.status === 'Limpia/Lista') {
       return `Habitación ${nextRoom.room_number} está lista`;
@@ -122,8 +122,7 @@ export default function DashboardPage() {
     return `Habitación ${nextRoom.room_number} cambió a: ${nextRoom.status}`;
   };
 
-  // Realtime puede entregar el registro anterior (payload.old) como objeto, como string
-  // base64/JSON, o no entregarlo (RLS). Esta función lo normaliza y valida antes de usarlo.
+  // Normalizador del objeto viejo entregado por Realtime
   const parseRealtimeOldRoom = (raw: unknown): Room | null => {
     if (!raw) return null;
 
@@ -147,9 +146,8 @@ export default function DashboardPage() {
     return null;
   };
 
-  // Publica una notificación: actualiza el toast flotante y acumula el historial.
+  // Publica una notificación en el toast y en el historial
   const publishNotification = useCallback((message: string, kind: NotificationItem['kind'] = 'info') => {
-    // Representación sonora de que llegó una notificación
     playNotificationSound();
 
     setNotification({ message, visible: true });
@@ -177,22 +175,19 @@ export default function DashboardPage() {
 
   const unreadCount = notificationsList.filter((n) => n.unread).length;
 
-  // Estados para el perfil del usuario activo (Recepcionista)
+  // Datos del usuario (Recepcionista)
   const [userData, setUserData] = useState<{ nombre: string; role: string; email: string; hotel_id?: string } | null>(null);
 
   // Zonas/pisos del hotel para filtros
   const [zonas, setZonas] = useState<string[]>([]);
   const [selectedZone, setSelectedZone] = useState<string | null>(null);
 
-  // Configuración de tiempos límite por tipo de habitación + reloj base para los temporizadores
+  // Configuración de tiempos SLA
   const [typeConfigs, setTypeConfigs] = useState<Record<string, { tiempo_estandar_min: number; sla_min: number }>>({});
 
-  // ─── Server Time Sync ───────────────────────────────────────────
-  // Offset medido una vez al cargar: serverTime - localTime
+  // Offset del servidor
   const [serverOffset, setServerOffset] = useState<number>(0);
   const [offsetReady, setOffsetReady] = useState(false);
-
-  // Tiempo "servidor" actual = localNow + offset. Se actualiza cada segundo.
   const [serverNow, setServerNow] = useState<number>(() => Date.now());
 
   useEffect(() => {
@@ -208,17 +203,15 @@ export default function DashboardPage() {
     return () => { cancelled = true; };
   }, []);
 
-  // Reloj base "servidor" (tick cada segundo)
+  // Reloj sincronizado
   useEffect(() => {
     if (!offsetReady) return;
     const tick = setInterval(() => setServerNow(Date.now() + serverOffset), 1000);
     return () => clearInterval(tick);
   }, [serverOffset, offsetReady]);
 
-  // Para compatibilidad con código existente que usa `now`
   const now = serverNow;
 
-  // Marca de tiempo relativa para el historial (se mantiene fresca por el reloj base `serverNow`)
   const formatRelativeTime = (ts: number) => {
     const diff = serverNow - ts;
     if (diff < 60000) return 'ahora';
@@ -229,14 +222,7 @@ export default function DashboardPage() {
     return new Date(ts).toLocaleDateString('es-VE', { day: 'numeric', month: 'short' });
   };
 
-  const formatDuration = (ms: number): string => {
-    const total = Math.floor(ms / 1000);
-    const m = Math.floor(total / 60);
-    const s = total % 60;
-    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  };
-
-  // Cierra el menú de notificaciones cuando se hace clic fuera de él
+  // Cierra menú al hacer clic fuera
   useEffect(() => {
     if (!showNotificationsMenu) return;
     const handleClickOutside = (event: MouseEvent) => {
@@ -250,7 +236,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     async function fetchInitialData() {
-      // 1. Obtener sesión de usuario actual y sus datos de la tabla profiles
+      // 1. Obtener perfil del usuario
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
         const { data: profile } = await supabase
@@ -261,7 +247,6 @@ export default function DashboardPage() {
 
         if (profile) {
           setUserData(profile);
-          // Cargar la configuración de tiempos límite por tipo de habitación del hotel
           if (profile.hotel_id) {
             const { data: cfg } = await supabase
               .from('room_type_config')
@@ -285,7 +270,7 @@ export default function DashboardPage() {
         }
       }
 
-      // 2. Obtener habitaciones
+      // 2. Obtener habitaciones y relaciones
       const { data, error } = await supabase
         .from('rooms')
         .select(`
@@ -294,12 +279,14 @@ export default function DashboardPage() {
           zonas:zona_id ( nombre )
         `)
         .order('room_number', { ascending: true });
+
       if (error) {
         console.error('Error cargando habitaciones:', error.message);
       } else {
         setRooms(data || []);
         roomsRef.current = data || [];
-        // Obtener inicios de limpieza desde ciclos_limpieza
+
+        // Inicios de limpieza
         const inProgressIds = (data || []).filter((r) => r.status === 'En Limpieza').map((r) => r.id);
         if (inProgressIds.length > 0) {
           const { data: startsData } = await supabase
@@ -307,6 +294,7 @@ export default function DashboardPage() {
             .select('habitacion_id, iniciado_at')
             .in('habitacion_id', inProgressIds)
             .is('finalizado_at', null);
+
           const starts: Record<string, number> = {};
           for (const row of startsData ?? []) {
             if (row.habitacion_id && row.iniciado_at) {
@@ -320,7 +308,7 @@ export default function DashboardPage() {
         }
       }
 
-      // 3. Obtener zonas/pisos del hotel para filtros
+      // 3. Obtener zonas/pisos
       if (userData?.hotel_id) {
         const { data: zonasData } = await supabase
           .from('zonas')
@@ -334,8 +322,10 @@ export default function DashboardPage() {
       }
       setLoading(false);
     }
+
     fetchInitialData();
 
+    // Configuración del canal Realtime
     const channel = supabase
       .channel('reception-realtime')
       .on(
@@ -348,27 +338,21 @@ export default function DashboardPage() {
               parseRealtimeOldRoom(payload.old) ??
               roomsRef.current.find((r) => r.id === updatedRoom.id);
 
-            // Actualización segura preservando las configuraciones y relaciones previas
+            // Preservación segura de objetos relacionales al actualizar el estado
             setRooms((prev) =>
               prev.map((room) => {
                 if (room.id === updatedRoom.id) {
                   return {
-                    ...room, // Conserva las propiedades existentes (incluyendo room_type_config y zonas)
-                    ...updatedRoom, // Sobrescribe solo los campos que cambiaron (status, cleaning_status, etc.)
-                    // Aseguramos explícitamente mantener la relación por si acaso:
-                    room_type_config: updatedRoom.tipo_habitacion_id === room.tipo_habitacion_id 
-                      ? room.room_type_config 
-                      : room.room_type_config,
-                    zonas: updatedRoom.zona_id === room.zona_id
-                      ? room.zonas
-                      : room.zonas
+                    ...room,
+                    ...updatedRoom,
+                    room_type_config: room.room_type_config,
+                    zonas: room.zonas
                   };
                 }
                 return room;
               })
             );
 
-            // Actualizamos también el ref para mantener la consistencia
             roomsRef.current = roomsRef.current.map((room) => {
               if (room.id === updatedRoom.id) {
                 return {
@@ -381,7 +365,7 @@ export default function DashboardPage() {
               return room;
             });
 
-            // El resto de tu lógica de notificaciones y tiempos se mantiene igual...
+            // Notificaciones por cambios de estado
             if (previousRoom && previousRoom.status !== updatedRoom.status) {
               const lastChange = lastUserChangeRef.current;
               if (!(lastChange && lastChange.roomId === updatedRoom.id && lastChange.newStatus === updatedRoom.status)) {
@@ -391,16 +375,14 @@ export default function DashboardPage() {
                 lastUserChangeRef.current = null;
               }
             }
-            
-            // ... (continúa con el manejo de En Limpieza, Prioridad, etc.)
+
+            // Manejo de temporizador para "En Limpieza"
             if (updatedRoom.status === 'En Limpieza' && previousRoom?.status !== 'En Limpieza') {
-              // 1. Establecer un inicio inmediato provisional usando 'now' por si la consulta tarda o falla
               setCleaningStarts((prev) => {
-                if (prev[updatedRoom.id]) return prev; // Si ya lo tiene, no lo sobreescribe
-                return { ...prev, [updatedRoom.id]: now };
+                if (prev[updatedRoom.id]) return prev;
+                return { ...prev, [updatedRoom.id]: Date.now() };
               });
 
-              // 2. Intentar buscar el timestamp exacto de la BD
               supabase
                 .from('ciclos_limpieza')
                 .select('iniciado_at')
@@ -429,9 +411,7 @@ export default function DashboardPage() {
             ) {
               publishNotification(
                 `Habitación ${updatedRoom.room_number} ${
-                  updatedRoom.is_priority
-                    ? 'marcada como prioritaria'
-                    : ': prioridad removida'
+                  updatedRoom.is_priority ? 'marcada como prioritaria' : ': prioridad removida'
                 }`,
                 'priority'
               );
@@ -439,7 +419,6 @@ export default function DashboardPage() {
 
             if (previousRoom && previousRoom.status === 'Ocupada' && updatedRoom.status === 'Sucia') {
               sendCheckoutWebhook(updatedRoom);
-
               const roomDirtyMessage = `Habitación ${updatedRoom.room_number} marcada como sucia.`;
               publishNotification(roomDirtyMessage, 'priority');
 
@@ -454,7 +433,7 @@ export default function DashboardPage() {
                   body: `⚠️ ${roomDirtyMessage}`,
                 });
               } catch (err) {
-                console.error('Error enviando ntfy al pasar a Sucia:', err);
+                console.error('Error enviando ntfy:', err);
               }
             }
           } else if (payload.eventType === 'INSERT') {
@@ -897,6 +876,9 @@ export default function DashboardPage() {
                 : 0;
               const isCritical = room.status === 'En Limpieza' && elapsed > slaMin * 60000;
 
+              // Obtener transiciones permitidas según el rol de Recepción
+              const availableTransitions = receptionTransitions[room.status] || [];
+
               return (
                 <div
                   key={room.id}
@@ -955,19 +937,21 @@ export default function DashboardPage() {
                         >
                           <Star className={`w-4 h-4 ${room.is_priority ? 'fill-amber-400' : 'fill-transparent'}`} />
                         </button>
+                        
+                        {/* Selector de cambio manual de estado */}
                         <select
                           value={room.status}
                           onChange={(e) => updateRoomStatus(room, e.target.value)}
-                          disabled={(receptionTransitions[room.status] || []).length === 0}
+                          disabled={availableTransitions.length === 0}
                           title={
-                            (receptionTransitions[room.status] || []).length === 0
+                            availableTransitions.length === 0
                               ? 'Recepción no puede cambiar esta habitación'
                               : 'Cambiar estado de la habitación'
                           }
                           className="text-[10px] bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-1 font-semibold text-slate-700 dark:text-slate-300 outline-none disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <option value={room.status}>{room.status}</option>
-                          {(receptionTransitions[room.status] || []).map((dest) => (
+                          {availableTransitions.map((dest) => (
                             <option key={dest} value={dest}>
                               {dest}
                             </option>
@@ -1019,6 +1003,7 @@ export default function DashboardPage() {
         )}
       </main>
 
+      {/* Toast Flotante de Notificación */}
       {notification ? (
         <div className={c('fixed bottom-6 right-6 bg-white dark:bg-[#111625] border border-emerald-500/30 p-4 rounded-2xl shadow-2xl flex items-start gap-3 max-w-sm z-50 animate-bounce')}>
           <div className={c('w-7 h-7 bg-emerald-500/10 rounded-xl flex items-center justify-center shrink-0 mt-0.5')}>
